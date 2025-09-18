@@ -510,6 +510,58 @@ class SpaceManager:
         except Exception as e:
             console.print(f"[red]Diagnosis failed: {e}[/red]")
 
+    def find_backup_folders(self, volume: Path) -> List[Path]:
+        """Find all AppBackup_* folders on a volume."""
+        backup_folders = []
+        try:
+            for item in volume.iterdir():
+                if item.is_dir() and item.name.startswith("AppBackup_"):
+                    backup_folders.append(item)
+        except Exception:
+            pass
+        return sorted(
+            backup_folders, key=lambda x: x.name, reverse=True
+        )  # Newest first
+
+    def select_backup_folder(self, volume: Path) -> Optional[Path]:
+        """Select a backup folder from a volume."""
+        backup_folders = self.find_backup_folders(volume)
+
+        if not backup_folders:
+            console.print(f"[red]No backup folders found on {volume.name}[/red]")
+            return None
+
+        if len(backup_folders) == 1:
+            console.print(
+                f"[green]Found backup folder: {backup_folders[0].name}[/green]"
+            )
+            return backup_folders[0]
+
+        console.print(
+            f"\n[bold]Found {len(backup_folders)} backup folders on {volume.name}:[/bold]"
+        )
+        for i, folder in enumerate(backup_folders, 1):
+            # Count apps in each folder
+            app_count = len(
+                [f for f in folder.iterdir() if f.is_dir() and f.suffix == ".app"]
+            )
+            console.print(f"{i}. {folder.name} ({app_count} apps)")
+
+        console.print(f"{len(backup_folders) + 1}. Restore ALL backup folders")
+
+        while True:
+            try:
+                choice = Prompt.ask("Select backup folder (number)", default="1")
+                choice_idx = int(choice) - 1
+                if 0 <= choice_idx < len(backup_folders):
+                    return backup_folders[choice_idx]
+                elif choice_idx == len(backup_folders):
+                    return "ALL"  # Special marker for restore all
+                else:
+                    console.print("[red]Invalid selection. Please try again.[/red]")
+            except ValueError:
+                console.print("[red]Please enter a valid number.[/red]")
+
     def restore_apps_from_backup(self, backup_folder: Path) -> bool:
         """Restore applications from backup folder to /Applications."""
         if not backup_folder.exists():
@@ -575,6 +627,42 @@ class SpaceManager:
 
         return True
 
+    def restore_all_backups_from_volume(self, volume: Path) -> bool:
+        """Restore all backup folders from a volume."""
+        backup_folders = self.find_backup_folders(volume)
+
+        if not backup_folders:
+            console.print(f"[red]No backup folders found on {volume.name}[/red]")
+            return False
+
+        console.print(
+            f"\n[bold]Found {len(backup_folders)} backup folders to restore:[/bold]"
+        )
+        for folder in backup_folders:
+            app_count = len(
+                [f for f in folder.iterdir() if f.is_dir() and f.suffix == ".app"]
+            )
+            console.print(f"  • {folder.name} ({app_count} apps)")
+
+        if not Confirm.ask(f"Restore all {len(backup_folders)} backup folders?"):
+            console.print("Restore cancelled.")
+            return False
+
+        success_count = 0
+        for backup_folder in backup_folders:
+            console.print(f"\n[bold]Restoring from {backup_folder.name}...[/bold]")
+            if self.restore_apps_from_backup(backup_folder):
+                success_count += 1
+            else:
+                console.print(
+                    f"[yellow]Failed to restore from {backup_folder.name}[/yellow]"
+                )
+
+        console.print(
+            f"\n[bold green]✓ Successfully restored {success_count}/{len(backup_folders)} backup folders[/bold green]"
+        )
+        return success_count > 0
+
 
 def main():
     """Main function."""
@@ -587,7 +675,8 @@ def main():
         epilog="""
 Examples:
   sudo python free-up-space-macos.py                    # Interactive mode - specify target free space
-  sudo python free-up-space-macos.py --restore /Volumes/MyDrive/AppBackup_20231201_143022
+  sudo python free-up-space-macos.py --restore /Volumes/MyDrive/AppBackup_20231201_143022  # Restore specific backup
+  sudo python free-up-space-macos.py --restore ""       # Interactive restore - select volume and backup folder
 
 The script will calculate how much space to free up based on your target free space goal.
 Perfect for OS upgrades that require specific amounts of free space.
@@ -595,7 +684,9 @@ Perfect for OS upgrades that require specific amounts of free space.
     )
 
     parser.add_argument(
-        "--restore", type=str, help="Restore applications from backup folder"
+        "--restore",
+        type=str,
+        help="Restore applications from backup folder (leave empty for interactive selection)",
     )
 
     args = parser.parse_args()
@@ -613,16 +704,52 @@ Perfect for OS upgrades that require specific amounts of free space.
 
     # Handle restore mode
     if args.restore:
-        backup_path = Path(args.restore)
-        console.print(f"[bold]Restore mode: {backup_path}[/bold]")
+        if args.restore.strip():
+            # Specific backup folder provided
+            backup_path = Path(args.restore)
+            console.print(f"[bold]Restore mode: {backup_path}[/bold]")
 
-        if manager.restore_apps_from_backup(backup_path):
-            console.print(
-                "\n[bold green]✓ Restore completed successfully![/bold green]"
-            )
+            if manager.restore_apps_from_backup(backup_path):
+                console.print(
+                    "\n[bold green]✓ Restore completed successfully![/bold green]"
+                )
+            else:
+                console.print("\n[bold red]✗ Restore failed![/bold red]")
+                sys.exit(1)
         else:
-            console.print("\n[bold red]✗ Restore failed![/bold red]")
-            sys.exit(1)
+            # No backup folder provided - interactive restore
+            console.print("[bold]Interactive restore mode[/bold]")
+            console.print("Select a volume to restore from:")
+
+            volume = manager.select_volume()
+            if not volume:
+                console.print("No volume selected. Restore cancelled.")
+                return
+
+            # Select backup folder
+            backup_selection = manager.select_backup_folder(volume)
+            if not backup_selection:
+                console.print("No backup folder selected. Restore cancelled.")
+                return
+
+            if backup_selection == "ALL":
+                # Restore all backup folders
+                if manager.restore_all_backups_from_volume(volume):
+                    console.print(
+                        "\n[bold green]✓ All restores completed successfully![/bold green]"
+                    )
+                else:
+                    console.print("\n[bold red]✗ Some restores failed![/bold red]")
+                    sys.exit(1)
+            else:
+                # Restore single backup folder
+                if manager.restore_apps_from_backup(backup_selection):
+                    console.print(
+                        "\n[bold green]✓ Restore completed successfully![/bold green]"
+                    )
+                else:
+                    console.print("\n[bold red]✗ Restore failed![/bold red]")
+                    sys.exit(1)
         return
 
     # Interactive mode

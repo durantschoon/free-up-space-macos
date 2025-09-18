@@ -85,15 +85,34 @@ The script will:
 
 ### Restore Mode
 
-To restore applications from a backup folder:
+#### Restore Specific Backup Folder
+
+To restore applications from a specific backup folder:
 
 ```bash
 sudo python free-up-space-macos.py --restore /Volumes/MyDrive/AppBackup_20231201_143022
 ```
 
+#### Interactive Restore (New!)
+
+To interactively select a volume and backup folder:
+
+```bash
+sudo python free-up-space-macos.py --restore ""
+```
+
+The interactive restore will:
+
+1. Show available volumes in `/Volumes`
+2. Let you select a volume
+3. Find all `AppBackup_*` folders on that volume
+4. Show backup folders with app counts
+5. Let you select a specific backup or restore all backups
+6. Restore applications back to `/Applications`
+
 The script will:
 
-1. Scan the backup folder for applications
+1. Scan the backup folder(s) for applications
 2. Show you what will be restored
 3. Ask for confirmation
 4. Move applications back to `/Applications`
@@ -106,11 +125,11 @@ The script will:
 ```bash
 $ sudo python free-up-space-macos.py
 
-┌─────────────────────────────────────────────────────────────┐
-│                    Free Up Space macOS                     │
-│        Move large applications to removable drives         │
-│                   to free up space                         │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                    Free Up Space macOS                       │
+│        Move large applications to removable drives           │
+│                   to free up space                           │
+└──────────────────────────────────────────────────────────────┘
 
 Current free space: 8.5 GB
 
@@ -153,13 +172,15 @@ To restore later, use: sudo python free-up-space-macos.py --restore /Volumes/MyE
 
 ### Restoring Applications
 
+#### Specific Backup Folder
+
 ```bash
 $ sudo python free-up-space-macos.py --restore /Volumes/MyExternalDrive/AppBackup_20231201_143022
 
 ┌─────────────────────────────────────────────────────────────┐
-│                    Free Up Space macOS                     │
-│        Move large applications to removable drives         │
-│                   to free up space                         │
+│                    Free Up Space macOS                      │
+│        Move large applications to removable drives          │
+│                   to free up space                          │
 └─────────────────────────────────────────────────────────────┘
 
 Restore mode: /Volumes/MyExternalDrive/AppBackup_20231201_143022
@@ -184,9 +205,56 @@ Do you want to restore these applications? [y/N]: y
 ✓ Restore completed successfully!
 ```
 
+#### Interactive Restore
+
+```bash
+$ sudo python free-up-space-macos.py --restore ""
+
+┌─────────────────────────────────────────────────────────────┐
+│                    Free Up Space macOS                      │
+│        Move large applications to removable drives          │
+│                   to free up space                          │
+└─────────────────────────────────────────────────────────────┘
+
+Interactive restore mode
+Select a volume to restore from:
+
+Available volumes:
+1. MyExternalDrive (/Volumes/MyExternalDrive)
+2. USB_Stick (/Volumes/USB_Stick)
+
+Select volume (number) [1]: 1
+
+Found 2 backup folders on MyExternalDrive:
+1. AppBackup_20231201_143022 (3 apps)
+2. AppBackup_20231201_120000 (2 apps)
+3. Restore ALL backup folders
+
+Select backup folder (number) [1]: 3
+
+Found 2 backup folders to restore:
+  • AppBackup_20231201_143022 (3 apps)
+  • AppBackup_20231201_120000 (2 apps)
+
+Restore all 2 backup folders? [y/N]: y
+
+Restoring from AppBackup_20231201_143022...
+✓ Restored Adobe Photoshop 2024
+✓ Restored Final Cut Pro
+✓ Restored Xcode
+
+Restoring from AppBackup_20231201_120000...
+✓ Restored Docker
+✓ Restored Slack
+
+✓ Successfully restored 2/2 backup folders
+✓ All restores completed successfully!
+```
+
 ## Command Line Options
 
-- `--restore <path>`: Restore applications from a backup folder
+- `--restore <path>`: Restore applications from a specific backup folder
+- `--restore ""`: Interactive restore mode - select volume and backup folder
 - `--help`: Show help message and usage examples
 
 ## How It Works
@@ -236,7 +304,7 @@ If an application appears to be missing after restoration, check that:
 free-up-space-macos/
 ├── free-up-space-macos.py    # Main script
 ├── requirements.txt          # Python dependencies
-└── README.md                # This file
+└── README.md                 # This file
 ```
 
 ## Dependencies
