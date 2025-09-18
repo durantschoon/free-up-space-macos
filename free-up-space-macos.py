@@ -110,20 +110,43 @@ class SpaceManager:
         apps.sort(key=lambda x: x.size_bytes, reverse=True)
         return apps
 
-    def select_apps_for_target_size(
-        self, apps: List[AppInfo], target_gb: float
-    ) -> List[AppInfo]:
-        """Select applications that will free up the target amount of space."""
+    def get_current_free_space(self) -> float:
+        """Get current free space on the main drive in GB."""
+        try:
+            import shutil
+
+            # Get disk usage for the root filesystem
+            total, used, free = shutil.disk_usage("/")
+            return free / (1024**3)  # Convert bytes to GB
+        except Exception:
+            return 0.0
+
+    def calculate_space_to_free(self, target_free_gb: float) -> float:
+        """Calculate how much space needs to be freed to reach target free space."""
+        current_free_gb = self.get_current_free_space()
+        space_needed = target_free_gb - current_free_gb
+        return max(0.0, space_needed)  # Don't return negative values
+
+    def select_apps_for_target_free_space(
+        self, apps: List[AppInfo], target_free_gb: float
+    ) -> Tuple[List[AppInfo], float, float]:
+        """Select applications to reach target free space. Returns (selected_apps, space_to_free, current_free)."""
+        current_free_gb = self.get_current_free_space()
+        space_to_free_gb = self.calculate_space_to_free(target_free_gb)
+
+        if space_to_free_gb <= 0:
+            return [], 0.0, current_free_gb
+
         selected_apps = []
         total_size_gb = 0.0
 
         for app in apps:
-            if total_size_gb >= target_gb:
+            if total_size_gb >= space_to_free_gb:
                 break
             selected_apps.append(app)
             total_size_gb += app.size_gb
 
-        return selected_apps
+        return selected_apps, space_to_free_gb, current_free_gb
 
     def check_apps_in_use(self, apps: List[AppInfo]) -> List[AppInfo]:
         """Check which applications are currently in use."""
@@ -563,8 +586,11 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  sudo python free-up-space-macos.py                    # Interactive mode
+  sudo python free-up-space-macos.py                    # Interactive mode - specify target free space
   sudo python free-up-space-macos.py --restore /Volumes/MyDrive/AppBackup_20231201_143022
+
+The script will calculate how much space to free up based on your target free space goal.
+Perfect for OS upgrades that require specific amounts of free space.
         """,
     )
 
@@ -601,14 +627,31 @@ Examples:
 
     # Interactive mode
     try:
-        # Get target size
-        target_gb = float(
-            Prompt.ask("How many gigabytes do you want to free up?", default="5.0")
+        # Get current free space and show it
+        current_free = manager.get_current_free_space()
+        console.print(f"\n[bold]Current free space: {current_free:.2f} GB[/bold]")
+
+        # Get target free space
+        target_free_gb = float(
+            Prompt.ask("How many GB of free space do you want total?", default="20.0")
         )
 
+        # Calculate space needed
+        space_to_free = manager.calculate_space_to_free(target_free_gb)
+
+        if space_to_free <= 0:
+            console.print(
+                f"\n[green]✓ You already have {current_free:.2f} GB free space![/green]"
+            )
+            console.print(
+                f"[green]Target: {target_free_gb} GB - No action needed.[/green]"
+            )
+            return
+
         console.print(
-            f"\n[bold]Scanning applications to free up {target_gb} GB...[/bold]"
+            f"\n[bold]Need to free up {space_to_free:.2f} GB to reach {target_free_gb} GB total free space[/bold]"
         )
+        console.print("[bold]Scanning applications...[/bold]")
 
         # Get all applications
         apps = manager.get_applications()
@@ -618,7 +661,9 @@ Examples:
             return
 
         # Select apps to move
-        selected_apps = manager.select_apps_for_target_size(apps, target_gb)
+        selected_apps, space_to_free, current_free = (
+            manager.select_apps_for_target_free_space(apps, target_free_gb)
+        )
 
         if not selected_apps:
             console.print(
@@ -651,11 +696,14 @@ Examples:
         console.print(
             f"\n[bold]Selected {len(selected_apps)} applications (Total: {total_size:.2f} GB)[/bold]"
         )
+        console.print(
+            f"[dim]This will free up {total_size:.2f} GB, giving you {current_free + total_size:.2f} GB total free space[/dim]"
+        )
         manager.display_apps_table(selected_apps, "Applications to Move")
 
         # Confirm selection
         if not Confirm.ask(
-            f"\nMove these applications to free up {total_size:.2f} GB?"
+            f"\nMove these applications to reach {target_free_gb} GB free space?"
         ):
             console.print("Operation cancelled.")
             return
@@ -674,12 +722,22 @@ Examples:
         success, failed_apps = manager.move_apps_to_volume(selected_apps, backup_folder)
 
         if success:
+            new_free_space = manager.get_current_free_space()
             console.print(
                 f"\n[bold green]✓ Successfully moved {len(selected_apps)} applications![/bold green]"
             )
+            console.print(
+                f"[bold green]New free space: {new_free_space:.2f} GB[/bold green]"
+            )
             console.print(f"[bold]Backup location: {backup_folder}[/bold]")
             console.print(
-                f"[dim]To restore later, use: sudo python {sys.argv[0]} --restore {backup_folder}[/dim]"
+                f"\n[bold yellow]📋 RESTORE COMMAND (save this for later):[/bold yellow]"
+            )
+            console.print(
+                f"[bold cyan]sudo python {sys.argv[0]} --restore {backup_folder}[/bold cyan]"
+            )
+            console.print(
+                f"[dim]Copy and save this command to restore your applications later[/dim]"
             )
         else:
             # Check what's in the backup folder
@@ -704,7 +762,13 @@ Examples:
                 console.print(f"[dim]These were moved manually as instructed.[/dim]")
 
             console.print(
-                f"[dim]To restore later, use: sudo python {sys.argv[0]} --restore {backup_folder}[/dim]"
+                f"\n[bold yellow]📋 RESTORE COMMAND (save this for later):[/bold yellow]"
+            )
+            console.print(
+                f"[bold cyan]sudo python {sys.argv[0]} --restore {backup_folder}[/bold cyan]"
+            )
+            console.print(
+                f"[dim]Copy and save this command to restore your applications later[/dim]"
             )
 
     except KeyboardInterrupt:

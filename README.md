@@ -1,6 +1,6 @@
 # Free Up Space macOS
 
-A Python command-line tool with a beautiful colored interface that helps you free up space on your Mac by moving large applications to removable drives. The tool intelligently selects the largest applications to meet your space requirements and provides easy restoration functionality.
+A Python command-line tool with a beautiful colored interface that helps you free up space on your Mac by moving large applications to removable drives. The tool intelligently calculates how much space to free up based on your target free space goal and provides easy restoration functionality.
 
 ## Features
 
@@ -14,7 +14,8 @@ A Python command-line tool with a beautiful colored interface that helps you fre
 
 - Scans `/Applications` directory for all `.app` bundles
 - Calculates actual disk usage for each application
-- Selects largest applications to meet your target space requirements
+- **Target-based space calculation**: Specify how much total free space you want
+- Perfect for OS upgrades that require specific amounts of free space
 - Shows detailed information before making changes
 
 💾 **Flexible Storage Options**
@@ -53,6 +54,16 @@ A Python command-line tool with a beautiful colored interface that helps you fre
 
 ## Usage
 
+### Perfect for OS Upgrades
+
+This tool is especially useful for macOS upgrades that require specific amounts of free space:
+
+- **macOS Sonoma**: Requires ~20GB free space
+- **macOS Sequoia**: Requires ~25GB free space
+- **Any macOS upgrade**: Just enter the required amount
+
+The script will calculate exactly how much space to free up to reach your target.
+
 ### Interactive Mode (Default)
 
 Run the script without arguments to start the interactive mode:
@@ -63,12 +74,14 @@ sudo python free-up-space-macos.py
 
 The script will:
 
-1. Ask how many gigabytes you want to free up
-2. Scan your `/Applications` directory
-3. Show you the largest applications that will be moved
-4. Ask for confirmation
-5. Let you select a removable drive
-6. Move the applications to a timestamped backup folder
+1. Show your current free space
+2. Ask how many GB of total free space you want (perfect for OS upgrades)
+3. Calculate exactly how much space needs to be freed up
+4. Scan your `/Applications` directory for the largest apps
+5. Show you which applications will be moved
+6. Ask for confirmation
+7. Let you select a removable drive
+8. Move the applications to a timestamped backup folder
 
 ### Restore Mode
 
@@ -99,11 +112,15 @@ $ sudo python free-up-space-macos.py
 │                   to free up space                         │
 └─────────────────────────────────────────────────────────────┘
 
-How many gigabytes do you want to free up? [5.0]: 10
+Current free space: 8.5 GB
 
-Scanning applications to free up 10.0 GB...
+How many GB of free space do you want total? [20.0]: 25
 
-Selected 3 applications (Total: 12.45 GB)
+Need to free up 16.5 GB to reach 25.0 GB total free space
+Scanning applications...
+
+Selected 3 applications (Total: 17.2 GB)
+This will free up 17.2 GB, giving you 25.7 GB total free space
 ┌─────────────────────────────────────────────────────────────┐
 │                    Applications to Move                     │
 ├─────────────────────────────────────────────────────────────┤
@@ -111,10 +128,10 @@ Selected 3 applications (Total: 12.45 GB)
 ├─────────────────────────────────────────────────────────────┤
 │ Adobe Photoshop 2024    │     4.23  │ /Applications/Adobe   │
 │ Final Cut Pro           │     3.87  │ /Applications/Final   │
-│ Xcode                   │     4.35  │ /Applications/Xcode   │
+│ Xcode                   │     9.10  │ /Applications/Xcode   │
 └─────────────────────────────────────────────────────────────┘
 
-Move these applications to free up 12.45 GB? [y/N]: y
+Move these applications to reach 25.0 GB free space? [y/N]: y
 
 Available volumes:
 1. MyExternalDrive (/Volumes/MyExternalDrive)
@@ -129,6 +146,7 @@ Moving applications to: /Volumes/MyExternalDrive/AppBackup_20231201_143022
 ✓ Moved Xcode
 
 ✓ Successfully moved 3 applications!
+New free space: 25.7 GB
 Backup location: /Volumes/MyExternalDrive/AppBackup_20231201_143022
 To restore later, use: sudo python free-up-space-macos.py --restore /Volumes/MyExternalDrive/AppBackup_20231201_143022
 ```
