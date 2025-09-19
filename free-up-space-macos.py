@@ -422,6 +422,28 @@ class SpaceManager:
 
         return len(failed_apps) == 0, failed_apps
 
+    def _remove_app_safely(self, app_path: Path) -> bool:
+        """Safely remove an application with better error handling."""
+        try:
+            import subprocess
+
+            # Use rm -rf which is often faster and more reliable than shutil.rmtree
+            result = subprocess.run(
+                ["rm", "-rf", str(app_path)],
+                capture_output=True,
+                text=True,
+                timeout=60,  # 60 second timeout
+            )
+            return result.returncode == 0
+        except subprocess.TimeoutExpired:
+            console.print(
+                f"[red]✗[/red] Timeout removing {app_path.name} (took longer than 60 seconds)"
+            )
+            return False
+        except Exception as e:
+            console.print(f"[red]✗[/red] Failed to remove {app_path.name}: {e}")
+            return False
+
     def _show_manual_move_instructions(self, app: AppInfo, backup_folder: Path) -> None:
         """Show instructions for manually moving a problematic application."""
         console.print(
@@ -562,32 +584,217 @@ class SpaceManager:
             except ValueError:
                 console.print("[red]Please enter a valid number.[/red]")
 
-    def restore_apps_from_backup(self, backup_folder: Path) -> bool:
-        """Restore applications from backup folder to /Applications."""
-        if not backup_folder.exists():
-            console.print(f"[red]Backup folder not found: {backup_folder}[/red]")
+    def _calculate_app_hash(self, app_path: Path) -> str:
+        """Calculate a hash of the app bundle for verification."""
+        try:
+            import hashlib
+
+            hash_md5 = hashlib.md5()
+
+            # Hash the Info.plist and executable as a quick integrity check
+            info_plist = app_path / "Contents" / "Info.plist"
+            if info_plist.exists():
+                with open(info_plist, "rb") as f:
+                    hash_md5.update(f.read())
+
+            # Also hash the app name and size for additional verification
+            hash_md5.update(app_path.name.encode())
+            hash_md5.update(str(app_path.stat().st_size).encode())
+
+            return hash_md5.hexdigest()
+        except Exception:
+            return ""
+
+    def _apps_are_identical(self, source_path: Path, dest_path: Path) -> bool:
+        """Check if two app bundles are identical."""
+        try:
+            if not dest_path.exists():
+                return False
+
+            # Quick size check first
+            if source_path.stat().st_size != dest_path.stat().st_size:
+                return False
+
+            # Check if both have Info.plist
+            source_info = source_path / "Contents" / "Info.plist"
+            dest_info = dest_path / "Contents" / "Info.plist"
+
+            if not (source_info.exists() and dest_info.exists()):
+                return False
+
+            # Compare Info.plist content
+            with open(source_info, "rb") as f1, open(dest_info, "rb") as f2:
+                return f1.read() == f2.read()
+
+        except Exception:
             return False
 
-        apps_to_restore = [
-            f for f in backup_folder.iterdir() if f.is_dir() and f.suffix == ".app"
-        ]
+    def _check_app_integrity(self, app_path: Path) -> bool:
+        """Check if an app bundle has the essential files for restoration."""
+        try:
+            # Check for essential app bundle structure
+            if not app_path.exists():
+                return False
 
-        if not apps_to_restore:
-            console.print("[red]No applications found in backup folder[/red]")
+            # Check for Info.plist (essential for app bundles)
+            info_plist = app_path / "Contents" / "Info.plist"
+            if not info_plist.exists():
+                console.print(f"[yellow]⚠[/yellow] {app_path.name}: Missing Info.plist")
+                return False
+
+            # Check for executable
+            executable_name = None
+            try:
+                import plistlib
+
+                with open(info_plist, "rb") as f:
+                    plist = plistlib.load(f)
+                    executable_name = plist.get("CFBundleExecutable")
+            except Exception:
+                pass
+
+            if executable_name:
+                executable_path = app_path / "Contents" / "MacOS" / executable_name
+                if not executable_path.exists():
+                    console.print(
+                        f"[yellow]⚠[/yellow] {app_path.name}: Missing executable {executable_name}"
+                    )
+                    return False
+
+            return True
+        except Exception as e:
+            console.print(
+                f"[yellow]⚠[/yellow] {app_path.name}: Integrity check failed: {e}"
+            )
             return False
+
+    def find_recently_modified_apps(self, hours: int = 24) -> List[Path]:
+        """Find recently modified apps in /Applications."""
+        import time
+
+        cutoff_time = time.time() - (hours * 3600)  # hours to seconds
+        recent_apps = []
+
+        try:
+            for app_path in self.applications_dir.iterdir():
+                if app_path.is_dir() and app_path.suffix == ".app":
+                    # Check if the app was modified recently
+                    if app_path.stat().st_mtime > cutoff_time:
+                        # Filter out symlinks and aliases
+                        if not self._is_symlink_or_alias(app_path):
+                            recent_apps.append(app_path)
+                        else:
+                            console.print(
+                                f"[yellow]⚠[/yellow] {app_path.name}: App appears to be a symlink or alias - skipping"
+                            )
+        except Exception as e:
+            console.print(f"[yellow]⚠[/yellow] Error scanning /Applications: {e}")
+
+        # Sort by modification time (most recent first)
+        recent_apps.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+        return recent_apps
+
+    def _check_app_in_use(self, app_path: Path) -> bool:
+        """Check if an app is currently in use by any process."""
+        try:
+            import subprocess
+
+            # Use lsof to check if any process has the app open
+            result = subprocess.run(
+                ["lsof", str(app_path)], capture_output=True, text=True, timeout=5
+            )
+            return result.returncode == 0 and result.stdout.strip()
+        except Exception:
+            return False
+
+    def _is_symlink_or_alias(self, app_path: Path) -> bool:
+        """Check if an app is a symlink or alias pointing to external drive."""
+        try:
+            # Check if it's a symlink
+            if app_path.is_symlink():
+                return True
+
+            # Check if it's an alias by looking at the file size
+            # Real app bundles should be much larger than a few bytes
+            if app_path.stat().st_size < 1000:  # Less than 1KB is suspicious
+                return True
+
+            # Check if Contents directory exists and has reasonable size
+            contents_dir = app_path / "Contents"
+            if not contents_dir.exists():
+                return True
+
+            # Check if the app bundle has the expected structure
+            info_plist = contents_dir / "Info.plist"
+            if not info_plist.exists() or info_plist.stat().st_size < 100:
+                return True
+
+            return False
+        except Exception:
+            return True  # If we can't check, assume it's problematic
+
+    def _get_real_app_size(self, app_path: Path) -> float:
+        """Get the real size of an app bundle, handling symlinks and aliases."""
+        try:
+            if self._is_symlink_or_alias(app_path):
+                return 0.0  # Symlinks/aliases don't count as real size
+
+            # Calculate actual directory size
+            total_size = 0
+            for root, dirs, files in os.walk(app_path):
+                for file in files:
+                    try:
+                        file_path = Path(root) / file
+                        if file_path.exists() and not file_path.is_symlink():
+                            total_size += file_path.stat().st_size
+                    except Exception:
+                        continue
+
+            return total_size / (1024**3)  # Convert to GB
+        except Exception:
+            return 0.0
+
+    def _wait_for_app_unlock(self, app_path: Path, max_wait: int = 30) -> bool:
+        """Wait for an app to become unlocked, with progress indication."""
+        console.print(f"[dim]Checking if {app_path.stem} is in use...[/dim]")
+
+        for attempt in range(max_wait):
+            if not self._check_app_in_use(app_path):
+                if attempt > 0:
+                    console.print(f"[green]✓[/green] {app_path.stem} is now available")
+                return True
+
+            if attempt == 0:
+                console.print(f"[yellow]⚠[/yellow] {app_path.stem} is currently in use")
+                console.print(
+                    "[dim]This is common after copying files - macOS may be indexing or scanning them[/dim]"
+                )
+                console.print("[dim]Waiting for the app to become available...[/dim]")
+
+            # Show progress dots
+            dots = "." * ((attempt % 3) + 1)
+            console.print(
+                f"[dim]Waiting{dots} ({attempt + 1}/{max_wait})[/dim]", end="\r"
+            )
+
+            import time
+
+            time.sleep(1)
 
         console.print(
-            f"\n[bold]Found {len(apps_to_restore)} applications to restore[/bold]"
+            f"\n[yellow]⚠[/yellow] {app_path.stem} is still in use after {max_wait} seconds"
         )
+        return False
 
-        # Display what will be restored
-        self.display_apps_table(
-            [AppInfo(app) for app in apps_to_restore], "Applications to Restore"
+    def fix_permissions_for_apps(self, apps: List[Path]) -> bool:
+        """Fix permissions and attributes for a list of apps."""
+        if not apps:
+            console.print("[yellow]No applications to fix permissions for[/yellow]")
+            return True
+
+        console.print(
+            f"\n[bold]Fixing permissions for {len(apps)} applications...[/bold]"
         )
-
-        if not Confirm.ask("Do you want to restore these applications?"):
-            console.print("Restore cancelled.")
-            return False
 
         with Progress(
             SpinnerColumn(),
@@ -597,33 +804,394 @@ class SpaceManager:
             console=console,
         ) as progress:
 
-            for app_path in apps_to_restore:
+            for app_path in apps:
+                task = progress.add_task(f"Fixing {app_path.stem}...", total=100)
+
+                try:
+                    # Wait for app to be unlocked if it's in use
+                    progress.update(task, completed=10)
+                    if not self._wait_for_app_unlock(app_path):
+                        console.print(
+                            f"[yellow]⚠[/yellow] Skipping {app_path.stem} - still in use"
+                        )
+                        progress.update(task, completed=100)
+                        continue
+
+                    # Set correct permissions
+                    progress.update(task, completed=25)
+                    try:
+                        os.chmod(
+                            app_path,
+                            stat.S_IRWXU
+                            | stat.S_IRGRP
+                            | stat.S_IXGRP
+                            | stat.S_IROTH
+                            | stat.S_IXOTH,
+                        )
+                    except Exception as e:
+                        console.print(
+                            f"[yellow]⚠[/yellow] Could not set permissions for {app_path.stem}: {e}"
+                        )
+
+                    # Remove extended attributes
+                    progress.update(task, completed=50)
+                    self._remove_extended_attributes(app_path)
+
+                    # Fix permissions recursively
+                    progress.update(task, completed=75)
+                    self._fix_permissions_recursively(app_path)
+
+                    progress.update(task, completed=100)
+                    console.print(
+                        f"[green]✓[/green] Fixed permissions for {app_path.stem}"
+                    )
+
+                except Exception as e:
+                    console.print(
+                        f"[yellow]⚠[/yellow] Could not fix permissions for {app_path.stem}: {e}"
+                    )
+                    progress.update(task, completed=100)
+
+        return True
+
+    def diagnose_and_fix_incomplete_copies(self, apps: List[Path]) -> List[Path]:
+        """Diagnose apps that appear to be incomplete copies and provide fix instructions."""
+        problematic_apps = []
+        fix_instructions = []
+
+        for app_path in apps:
+            if self._is_symlink_or_alias(app_path):
+                problematic_apps.append(app_path)
+                fix_instructions.append(f"rm -rf '{app_path}'")
+                continue
+
+            # Check if the app has reasonable size
+            real_size = self._get_real_app_size(app_path)
+            if real_size < 0.1:  # Less than 100MB is suspicious for most apps
+                problematic_apps.append(app_path)
+                fix_instructions.append(f"rm -rf '{app_path}'")
+                continue
+
+        if problematic_apps:
+            console.print(
+                f"\n[yellow]⚠[/yellow] Found {len(problematic_apps)} apps that appear to be incomplete copies:"
+            )
+            for app in problematic_apps:
+                console.print(f"  - {app.name}")
+
+            console.print(
+                f"\n[bold]These apps need to be removed and re-copied properly.[/bold]"
+            )
+            console.print(
+                f"[dim]Run these commands to clean up the incomplete copies:[/dim]"
+            )
+            for instruction in fix_instructions:
+                console.print(f"[dim]  {instruction}[/dim]")
+
+            console.print(f"\n[bold]Then re-copy the apps using rsync:[/bold]")
+            console.print(
+                f"[dim]rsync -av --progress '/Volumes/rPi_1T/hide-from-script-AppBackup_20250918_125950/' '/Applications/'[/dim]"
+            )
+
+            if Confirm.ask("Do you want to remove the incomplete copies now?"):
+                for app in problematic_apps:
+                    try:
+                        import shutil
+
+                        shutil.rmtree(app)
+                        console.print(f"[green]✓[/green] Removed {app.name}")
+                    except Exception as e:
+                        console.print(f"[red]✗[/red] Failed to remove {app.name}: {e}")
+
+                console.print(
+                    f"\n[yellow]Now re-copy the apps using rsync and run the script again.[/yellow]"
+                )
+                return []
+
+        return apps
+
+    def restore_apps_from_backup(self, backup_folder: Path) -> bool:
+        """Restore applications from backup folder to /Applications."""
+        if not backup_folder.exists():
+            console.print(
+                f"[yellow]⚠[/yellow] Backup folder not found: {backup_folder}"
+            )
+            console.print(
+                "[bold]Smart restore mode: Looking for recently copied applications...[/bold]"
+            )
+
+            # Find recently modified apps (within last 24 hours)
+            recent_apps = self.find_recently_modified_apps(hours=24)
+
+            if not recent_apps:
+                console.print(
+                    "[yellow]No recently modified applications found in /Applications[/yellow]"
+                )
+                console.print(
+                    "[dim]If you manually copied apps, they may be older than 24 hours[/dim]"
+                )
+                return False
+
+            # Filter to only valid app bundles
+            valid_recent_apps = []
+            for app in recent_apps:
+                if self._check_app_integrity(app):
+                    valid_recent_apps.append(app)
+                else:
+                    console.print(
+                        f"[yellow]⚠[/yellow] {app.name}: App bundle is corrupted or incomplete"
+                    )
+
+            if not valid_recent_apps:
+                console.print(
+                    "[red]No valid recently modified applications found[/red]"
+                )
+                return False
+
+            console.print(
+                f"\n[bold]Found {len(valid_recent_apps)} recently modified applications:[/bold]"
+            )
+
+            # Display what will be processed
+            self.display_apps_table(
+                [AppInfo(app) for app in valid_recent_apps],
+                "Recently Modified Applications",
+            )
+
+            if not Confirm.ask(
+                "Do you want to fix permissions for these applications?"
+            ):
+                console.print("Permission fix cancelled.")
+                return False
+
+            # Fix permissions for the recently modified apps
+            return self.fix_permissions_for_apps(valid_recent_apps)
+
+        apps_to_restore = [
+            f for f in backup_folder.iterdir() if f.is_dir() and f.suffix == ".app"
+        ]
+
+        if not apps_to_restore:
+            console.print("[red]No applications found in backup folder[/red]")
+            return False
+
+        # Check app integrity before attempting restore
+        valid_apps = []
+        for app in apps_to_restore:
+            if self._check_app_integrity(app):
+                valid_apps.append(app)
+            else:
+                console.print(
+                    f"[red]✗[/red] {app.name}: App bundle is corrupted or incomplete"
+                )
+
+        if not valid_apps:
+            console.print("[red]No valid applications found to restore[/red]")
+            return False
+
+        console.print(
+            f"\n[bold]Found {len(valid_apps)} valid applications to restore[/bold]"
+        )
+        if len(valid_apps) < len(apps_to_restore):
+            console.print(
+                f"[yellow]⚠[/yellow] {len(apps_to_restore) - len(valid_apps)} applications were skipped due to corruption"
+            )
+
+        # Display what will be restored
+        self.display_apps_table(
+            [AppInfo(app) for app in valid_apps], "Applications to Restore"
+        )
+
+        if not Confirm.ask("Do you want to restore these applications?"):
+            console.print("Restore cancelled.")
+            return False
+
+        # Pre-process apps to handle confirmations outside of progress bar
+        apps_to_process = []
+        for app_path in valid_apps:
+            destination = self.applications_dir / app_path.name
+
+            # Check if source exists
+            if not app_path.exists():
+                console.print(
+                    f"[yellow]⚠[/yellow] {app_path.stem} not found in backup, skipping..."
+                )
+                continue
+
+            # Check if destination already exists
+            if destination.exists():
+                console.print(
+                    f"[yellow]⚠[/yellow] {app_path.stem} already exists in /Applications"
+                )
+
+                # Check if apps are identical
+                if self._apps_are_identical(app_path, destination):
+                    console.print(
+                        f"[green]✓[/green] {app_path.stem} is already identical - skipping restore"
+                    )
+                    continue
+
+                # Ask for confirmation to overwrite
+                if not Confirm.ask(f"Overwrite existing {app_path.stem}?"):
+                    console.print(f"[dim]Skipping {app_path.stem}[/dim]")
+                    continue
+
+            apps_to_process.append(app_path)
+
+        if not apps_to_process:
+            console.print(
+                "[yellow]No applications to restore after processing[/yellow]"
+            )
+            return True
+
+        console.print(
+            f"\n[bold]Restoring {len(apps_to_process)} applications...[/bold]"
+        )
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console,
+        ) as progress:
+
+            for app_path in apps_to_process:
                 task = progress.add_task(f"Restoring {app_path.stem}...", total=100)
 
                 try:
                     destination = self.applications_dir / app_path.name
 
-                    # Move the application back
-                    shutil.move(str(app_path), str(destination))
+                    # Remove existing app if it exists (we already confirmed above)
+                    if destination.exists():
+                        console.print(
+                            f"[dim]Removing existing {app_path.stem}...[/dim]"
+                        )
+                        progress.update(task, completed=25)
+                        if not self._remove_app_safely(destination):
+                            console.print(f"[dim]Skipping {app_path.stem}[/dim]")
+                            progress.update(task, completed=100)
+                            continue
+                        console.print(
+                            f"[green]✓[/green] Removed existing {app_path.stem}"
+                        )
+
+                    # Try to move the application back
+                    progress.update(task, completed=50)
+                    move_success = False
+                    try:
+                        shutil.move(str(app_path), str(destination))
+                        move_success = True
+                    except Exception as e:
+                        console.print(
+                            f"[red]✗[/red] Failed to move {app_path.stem}: {e}"
+                        )
+                        console.print(
+                            f"[yellow]⚠[/yellow] Please manually copy {app_path.stem} to /Applications"
+                        )
+                        console.print(
+                            f"[dim]You can drag and drop the app from the external drive to /Applications[/dim]"
+                        )
+
+                        # Wait for user to manually copy
+                        if not Confirm.ask(
+                            f"Have you manually copied {app_path.stem} to /Applications?"
+                        ):
+                            console.print(f"[dim]Skipping {app_path.stem}[/dim]")
+                            progress.update(task, completed=100)
+                            continue
+
+                        # Verify the manual copy worked
+                        if not destination.exists():
+                            console.print(
+                                f"[red]✗[/red] {app_path.stem} not found in /Applications after manual copy"
+                            )
+                            progress.update(task, completed=100)
+                            continue
+
+                        move_success = True
 
                     # Set correct permissions
-                    os.chmod(
-                        destination,
-                        stat.S_IRWXU
-                        | stat.S_IRGRP
-                        | stat.S_IXGRP
-                        | stat.S_IROTH
-                        | stat.S_IXOTH,
-                    )
+                    progress.update(task, completed=75)
+                    try:
+                        os.chmod(
+                            destination,
+                            stat.S_IRWXU
+                            | stat.S_IRGRP
+                            | stat.S_IXGRP
+                            | stat.S_IROTH
+                            | stat.S_IXOTH,
+                        )
+                    except Exception as e:
+                        console.print(
+                            f"[yellow]⚠[/yellow] Could not set permissions for {app_path.stem}: {e}"
+                        )
 
                     progress.update(task, completed=100)
                     console.print(f"[green]✓[/green] Restored {app_path.stem}")
 
+                    # Only offer to remove backup copy if the app is actually in /Applications
+                    if destination.exists():
+                        # Ask if user wants to remove the backup copy
+                        if Confirm.ask(
+                            f"Remove backup copy of {app_path.stem} from external drive?"
+                        ):
+                            try:
+                                shutil.rmtree(app_path)
+                                console.print(
+                                    f"[dim]Removed backup copy of {app_path.stem}[/dim]"
+                                )
+                            except Exception as e:
+                                console.print(
+                                    f"[yellow]⚠[/yellow] Could not remove backup copy: {e}"
+                                )
+                    else:
+                        console.print(
+                            f"[yellow]⚠[/yellow] {app_path.stem} not found in /Applications - keeping backup copy"
+                        )
+
+                except FileNotFoundError as e:
+                    console.print(
+                        f"[yellow]⚠[/yellow] {app_path.stem}: Some files missing ({e}), but continuing..."
+                    )
+                    progress.update(task, completed=100)
+                    continue
+                except PermissionError as e:
+                    console.print(
+                        f"[red]✗[/red] Failed to restore {app_path.stem}: Permission denied"
+                    )
+                    console.print(
+                        f"[dim]Try running with sudo or check file permissions[/dim]"
+                    )
+                    return False
                 except Exception as e:
                     console.print(
                         f"[red]✗[/red] Failed to restore {app_path.stem}: {e}"
                     )
-                    return False
+                    console.print(
+                        f"[dim]Continuing with remaining applications...[/dim]"
+                    )
+                    progress.update(task, completed=100)
+                    continue
+
+        # Check if any apps were successfully restored
+        restored_count = 0
+        for app_path in apps_to_process:
+            destination = self.applications_dir / app_path.name
+            if destination.exists():
+                restored_count += 1
+
+        if restored_count == 0:
+            console.print("[red]No applications were successfully restored[/red]")
+            return False
+        elif restored_count < len(apps_to_process):
+            console.print(
+                f"[yellow]Successfully restored {restored_count}/{len(apps_to_process)} applications[/yellow]"
+            )
+        else:
+            console.print(
+                f"[green]✓[/green] Successfully restored all {restored_count} applications"
+            )
 
         return True
 
@@ -676,17 +1244,30 @@ def main():
 Examples:
   sudo python free-up-space-macos.py                    # Interactive mode - specify target free space
   sudo python free-up-space-macos.py --restore /Volumes/MyDrive/AppBackup_20231201_143022  # Restore specific backup
-  sudo python free-up-space-macos.py --restore ""       # Interactive restore - select volume and backup folder
+  sudo python free-up-space-macos.py --restore          # Interactive restore - select volume and backup folder
+  sudo python free-up-space-macos.py --fix-permissions  # Fix permissions for recently copied apps (smart restore)
 
 The script will calculate how much space to free up based on your target free space goal.
 Perfect for OS upgrades that require specific amounts of free space.
+
+Smart Restore Mode:
+  If you manually copy apps to /Applications and then delete the backup folder,
+  use --fix-permissions to automatically detect and fix permissions for recently copied apps.
         """,
     )
 
     parser.add_argument(
         "--restore",
         type=str,
-        help="Restore applications from backup folder (leave empty for interactive selection)",
+        nargs="?",
+        const="",
+        help="Restore applications from backup folder (no argument for interactive selection)",
+    )
+
+    parser.add_argument(
+        "--fix-permissions",
+        action="store_true",
+        help="Fix permissions for recently modified applications in /Applications (smart restore mode)",
     )
 
     args = parser.parse_args()
@@ -703,8 +1284,8 @@ Perfect for OS upgrades that require specific amounts of free space.
     manager = SpaceManager()
 
     # Handle restore mode
-    if args.restore:
-        if args.restore.strip():
+    if args.restore is not None:
+        if args.restore and args.restore.strip():
             # Specific backup folder provided
             backup_path = Path(args.restore)
             console.print(f"[bold]Restore mode: {backup_path}[/bold]")
@@ -729,7 +1310,77 @@ Perfect for OS upgrades that require specific amounts of free space.
             # Select backup folder
             backup_selection = manager.select_backup_folder(volume)
             if not backup_selection:
-                console.print("No backup folder selected. Restore cancelled.")
+                console.print("No backup folder selected.")
+                console.print(
+                    "[bold]Smart restore mode: Looking for recently copied applications...[/bold]"
+                )
+                console.print(
+                    "[dim]Note: If apps appear 'in use', this is normal after copying - macOS may be indexing or scanning them[/dim]"
+                )
+
+                # Find recently modified apps (within last 2 hours)
+                recent_apps = manager.find_recently_modified_apps(hours=2)
+
+                if not recent_apps:
+                    console.print(
+                        "[yellow]No recently modified applications found in /Applications (last 2 hours)[/yellow]"
+                    )
+                    console.print(
+                        "[dim]If you manually copied apps, they may be older than 2 hours[/dim]"
+                    )
+                    return
+
+                # Filter to only valid app bundles
+                valid_recent_apps = []
+                for app in recent_apps:
+                    if manager._check_app_integrity(app):
+                        valid_recent_apps.append(app)
+                    else:
+                        console.print(
+                            f"[yellow]⚠[/yellow] {app.name}: App bundle is corrupted or incomplete"
+                        )
+
+                if not valid_recent_apps:
+                    console.print(
+                        "[red]No valid recently modified applications found[/red]"
+                    )
+                    return
+
+                # Diagnose and fix incomplete copies
+                valid_recent_apps = manager.diagnose_and_fix_incomplete_copies(
+                    valid_recent_apps
+                )
+
+                if not valid_recent_apps:
+                    console.print(
+                        "[yellow]No valid applications to process after cleanup[/yellow]"
+                    )
+                    return
+
+                console.print(
+                    f"\n[bold]Found {len(valid_recent_apps)} recently modified applications:[/bold]"
+                )
+
+                # Display what will be processed
+                manager.display_apps_table(
+                    [AppInfo(app) for app in valid_recent_apps],
+                    "Recently Modified Applications (last 2 hours)",
+                )
+
+                if not Confirm.ask(
+                    "Do you want to fix permissions for these applications?"
+                ):
+                    console.print("Permission fix cancelled.")
+                    return
+
+                # Fix permissions for the recently modified apps
+                if manager.fix_permissions_for_apps(valid_recent_apps):
+                    console.print(
+                        "\n[bold green]✓ Permission fix completed successfully![/bold green]"
+                    )
+                else:
+                    console.print("\n[bold red]✗ Permission fix failed![/bold red]")
+                    sys.exit(1)
                 return
 
             if backup_selection == "ALL":
@@ -750,6 +1401,65 @@ Perfect for OS upgrades that require specific amounts of free space.
                 else:
                     console.print("\n[bold red]✗ Restore failed![/bold red]")
                     sys.exit(1)
+        return
+
+    # Handle fix-permissions mode
+    if args.fix_permissions:
+        console.print(
+            "[bold]Smart restore mode: Fixing permissions for recently copied applications[/bold]"
+        )
+        console.print(
+            "[dim]Note: If apps appear 'in use', this is normal after copying - macOS may be indexing or scanning them[/dim]"
+        )
+
+        # Find recently modified apps (within last 24 hours)
+        recent_apps = manager.find_recently_modified_apps(hours=24)
+
+        if not recent_apps:
+            console.print(
+                "[yellow]No recently modified applications found in /Applications[/yellow]"
+            )
+            console.print(
+                "[dim]If you manually copied apps, they may be older than 24 hours[/dim]"
+            )
+            return
+
+        # Filter to only valid app bundles
+        valid_recent_apps = []
+        for app in recent_apps:
+            if manager._check_app_integrity(app):
+                valid_recent_apps.append(app)
+            else:
+                console.print(
+                    f"[yellow]⚠[/yellow] {app.name}: App bundle is corrupted or incomplete"
+                )
+
+        if not valid_recent_apps:
+            console.print("[red]No valid recently modified applications found[/red]")
+            return
+
+        console.print(
+            f"\n[bold]Found {len(valid_recent_apps)} recently modified applications:[/bold]"
+        )
+
+        # Display what will be processed
+        manager.display_apps_table(
+            [AppInfo(app) for app in valid_recent_apps],
+            "Recently Modified Applications",
+        )
+
+        if not Confirm.ask("Do you want to fix permissions for these applications?"):
+            console.print("Permission fix cancelled.")
+            return
+
+        # Fix permissions for the recently modified apps
+        if manager.fix_permissions_for_apps(valid_recent_apps):
+            console.print(
+                "\n[bold green]✓ Permission fix completed successfully![/bold green]"
+            )
+        else:
+            console.print("\n[bold red]✗ Permission fix failed![/bold red]")
+            sys.exit(1)
         return
 
     # Interactive mode
