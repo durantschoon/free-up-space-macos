@@ -417,22 +417,24 @@ class SpaceManager:
                     failed_apps.append(app)
                     console.print(f"[red]✗[/red] Failed to move {app.name} with all methods")
 
-                    # Show manual move instructions
+                    # Show manual move instructions (this will pause for user input)
                     self._show_manual_move_instructions(app, backup_folder)
 
                     # Ask user to continue
-                    if not Confirm.ask(f"Continue with remaining applications?"):
+                    console.print(f"\n[bold]Continue with remaining applications?[/bold]")
+                    if not Confirm.ask("Continue?", default=True):
                         return False, failed_apps
 
             except (PermissionError, OSError, Exception) as e:
                 console.print(f"[red]✗[/red] Failed to move {app.name}: {e}")
                 failed_apps.append(app)
 
-                # Show manual move instructions
+                # Show manual move instructions (this will pause for user input)
                 self._show_manual_move_instructions(app, backup_folder)
 
                 # Ask user to continue
-                if not Confirm.ask(f"Continue with remaining applications?"):
+                console.print(f"\n[bold]Continue with remaining applications?[/bold]")
+                if not Confirm.ask("Continue?", default=True):
                     return False, failed_apps
 
         return len(failed_apps) == 0, failed_apps
@@ -461,21 +463,34 @@ class SpaceManager:
 
     def _show_manual_move_instructions(self, app: AppInfo, backup_folder: Path) -> None:
         """Show instructions for manually moving a problematic application."""
+        # Clear any progress output and add visual separation
+        console.print("\n" + "="*80)
         console.print(
-            f"\n[bold yellow]Manual Move Required for {app.name}[/bold yellow]"
+            f"\n[bold red]⚠ MANUAL MOVE REQUIRED for {app.name}[/bold red]"
         )
         console.print(f"[dim]This application couldn't be moved automatically.[/dim]")
-        console.print(f"\n[bold]Please do the following:[/bold]")
-        console.print(f"[dim]1. Open Finder[/dim]")
-        console.print(f"[dim]2. Navigate to: {app.path}[/dim]")
-        console.print(f"[dim]3. Drag {app.name} to: {backup_folder}[/dim]")
-        console.print(f"[dim]4. Delete the original from /Applications[/dim]")
-        console.print(f"\n[bold]Or use Terminal:[/bold]")
+        console.print("\n[bold cyan]📋 STEP-BY-STEP INSTRUCTIONS:[/bold cyan]")
+        console.print(f"[bold]1.[/bold] Open Finder")
+        console.print(f"[bold]2.[/bold] Navigate to: [cyan]{app.path}[/cyan]")
+        console.print(f"[bold]3.[/bold] Drag [yellow]{app.name}[/yellow] to: [cyan]{backup_folder}[/cyan]")
+        console.print(f"[bold]4.[/bold] Delete the original from /Applications")
+        
+        console.print(f"\n[bold cyan]🔧 OR USE TERMINAL COMMAND:[/bold cyan]")
         console.print(f"[dim]sudo mv '{app.path}' '{backup_folder}/'[/dim]")
-        console.print(
-            f"\n[yellow]Press Enter when you've completed the manual move...[/yellow]"
-        )
-        input()
+        
+        console.print(f"\n[bold yellow]⏳ WAITING FOR YOU TO COMPLETE THE MANUAL MOVE...[/bold yellow]")
+        console.print("[dim]Press Enter when you've finished moving the app manually.[/dim]")
+        console.print("="*80)
+        
+        # Use a more robust input method
+        try:
+            response = input("\n>>> Press Enter when done (or type 'skip' to continue without this app): ").strip()
+            if response.lower() == 'skip':
+                console.print(f"[yellow]Skipping {app.name} - you can move it manually later.[/yellow]")
+                return
+        except (EOFError, KeyboardInterrupt):
+            console.print(f"\n[yellow]Manual move cancelled for {app.name}[/yellow]")
+            return
 
     def test_app_move(self, app_path: Path) -> bool:
         """Test if an application can be moved by attempting a temporary move."""
