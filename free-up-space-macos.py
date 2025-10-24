@@ -85,6 +85,12 @@ class SpaceManager:
         self.applications_dir = Path("/Applications")
         self.volumes_dir = Path("/Volumes")
 
+        # Applications that should never be moved due to system integration or security
+        self.blacklisted_apps = {
+            "1Password.app",
+            # Add more apps here as needed
+        }
+
     def get_applications(self) -> List[AppInfo]:
         """Get all applications from /Applications directory."""
         apps = []
@@ -99,6 +105,12 @@ class SpaceManager:
             try:
                 for app_path in self.applications_dir.iterdir():
                     if app_path.is_dir() and app_path.suffix == ".app":
+                        # Skip blacklisted applications
+                        if app_path.name in self.blacklisted_apps:
+                            console.print(
+                                f"[dim]Skipping {app_path.name} (blacklisted)[/dim]"
+                            )
+                            continue
                         apps.append(AppInfo(app_path))
             except PermissionError:
                 console.print(
@@ -232,6 +244,26 @@ class SpaceManager:
 
         return volumes
 
+    def is_app_blacklisted(self, app_path: Path) -> bool:
+        """Check if an application is blacklisted and should not be moved."""
+        return app_path.name in self.blacklisted_apps
+
+    def get_blacklisted_apps(self) -> List[str]:
+        """Get list of blacklisted application names."""
+        return list(self.blacklisted_apps)
+
+    def display_blacklist_info(self) -> None:
+        """Display information about blacklisted applications."""
+        if self.blacklisted_apps:
+            console.print(
+                f"\n[bold cyan]🔒 Protected Applications (will not be moved):[/bold cyan]"
+            )
+            for app_name in sorted(self.blacklisted_apps):
+                console.print(f"[dim]  • {app_name}[/dim]")
+            console.print(
+                f"[dim]These apps have system integration or security features that require them to stay in /Applications[/dim]"
+            )
+
     def select_volume(self) -> Optional[Path]:
         """Prompt user to select a volume for storing applications."""
         volumes = self.get_available_volumes()
@@ -337,6 +369,14 @@ class SpaceManager:
 
                 try:
                     destination = backup_folder / app.path.name
+
+                    # Check if app is blacklisted
+                    if self.is_app_blacklisted(app.path):
+                        console.print(
+                            f"[yellow]⚠[/yellow] {app.name} is blacklisted and cannot be moved"
+                        )
+                        failed_apps.append(app)
+                        continue
 
                     # Check if app is in use
                     if self._check_app_in_use(app.path):
@@ -1675,6 +1715,9 @@ Smart Restore Mode:
         if not apps:
             console.print("[red]No applications found in /Applications[/red]")
             return
+
+        # Display blacklist information
+        manager.display_blacklist_info()
 
         # Select apps to move
         selected_apps, space_to_free, current_free = (
