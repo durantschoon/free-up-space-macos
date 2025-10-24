@@ -392,26 +392,30 @@ class SpaceManager:
                     except Exception:
                         pass  # Continue even if ownership change fails
 
-                    # Move the application
-                    progress.update(task, completed=75)
-                    shutil.move(str(app.path), str(destination))
+                # Move the application using copy-then-delete approach for better handling of protected apps
+                progress.update(task, completed=75)
+                move_success = self._move_app_robustly(app.path, destination)
 
+                if move_success:
                     # Set proper permissions on destination
-                    os.chmod(
-                        destination,
-                        stat.S_IRWXU
-                        | stat.S_IRGRP
-                        | stat.S_IXGRP
-                        | stat.S_IROTH
-                        | stat.S_IXOTH,
-                    )
+                    try:
+                        os.chmod(
+                            destination,
+                            stat.S_IRWXU
+                            | stat.S_IRGRP
+                            | stat.S_IXGRP
+                            | stat.S_IROTH
+                            | stat.S_IXOTH,
+                        )
+                    except Exception as e:
+                        console.print(f"[yellow]⚠[/yellow] Could not set permissions on destination: {e}")
 
                     progress.update(task, completed=100)
                     console.print(f"[green]✓[/green] Moved {app.name}")
-
-                except (PermissionError, OSError, Exception) as e:
-                    console.print(f"[red]✗[/red] Failed to move {app.name}: {e}")
+                else:
+                    # Move failed, add to failed apps
                     failed_apps.append(app)
+                    console.print(f"[red]✗[/red] Failed to move {app.name} with all methods")
 
                     # Show manual move instructions
                     self._show_manual_move_instructions(app, backup_folder)
@@ -419,6 +423,17 @@ class SpaceManager:
                     # Ask user to continue
                     if not Confirm.ask(f"Continue with remaining applications?"):
                         return False, failed_apps
+
+            except (PermissionError, OSError, Exception) as e:
+                console.print(f"[red]✗[/red] Failed to move {app.name}: {e}")
+                failed_apps.append(app)
+
+                # Show manual move instructions
+                self._show_manual_move_instructions(app, backup_folder)
+
+                # Ask user to continue
+                if not Confirm.ask(f"Continue with remaining applications?"):
+                    return False, failed_apps
 
         return len(failed_apps) == 0, failed_apps
 
@@ -705,6 +720,121 @@ class SpaceManager:
             )
             return result.returncode == 0 and result.stdout.strip()
         except Exception:
+            return False
+
+    def _move_app_robustly(self, source: Path, destination: Path) -> bool:
+        """Move an app using a robust copy-then-delete approach with multiple fallback methods."""
+        try:
+            # Method 1: Try direct move first (fastest for unprotected apps)
+            try:
+                shutil.move(str(source), str(destination))
+                return True
+            except (PermissionError, OSError) as e:
+                console.print(f"[dim]Direct move failed: {e}[/dim]")
+                console.print("[dim]Trying copy-then-delete approach...[/dim]")
+
+            # Method 2: Copy-then-delete approach
+            try:
+                # Copy the entire app bundle
+                shutil.copytree(str(source), str(destination), symlinks=True)
+                
+                # Verify the copy was successful by checking key files
+                if self._verify_app_copy(source, destination):
+                    # Remove the original
+                    shutil.rmtree(str(source))
+                    return True
+                else:
+                    # Copy verification failed, remove the incomplete copy
+                    shutil.rmtree(str(destination), ignore_errors=True)
+                    raise Exception("Copy verification failed")
+                    
+            except Exception as e:
+                console.print(f"[dim]Copy-then-delete failed: {e}[/dim]")
+                console.print("[dim]Trying rsync approach...[/dim]")
+
+            # Method 3: Use rsync (handles permissions and attributes better)
+            try:
+                import subprocess
+                
+                # Use rsync with proper flags for app bundles
+                result = subprocess.run([
+                    "rsync", "-av", "--delete", "--progress",
+                    f"{source}/", str(destination)
+                ], capture_output=True, text=True, timeout=300)  # 5 minute timeout
+                
+                if result.returncode == 0:
+                    # Verify the rsync copy
+                    if self._verify_app_copy(source, destination):
+                        # Remove the original
+                        shutil.rmtree(str(source))
+                        return True
+                    else:
+                        shutil.rmtree(str(destination), ignore_errors=True)
+                        raise Exception("rsync copy verification failed")
+                else:
+                    raise Exception(f"rsync failed: {result.stderr}")
+                    
+            except Exception as e:
+                console.print(f"[dim]rsync approach failed: {e}[/dim]")
+                console.print("[dim]Trying manual copy approach...[/dim]")
+
+            # Method 4: Manual copy with extended attribute handling
+            try:
+                import subprocess
+                
+                # Use ditto which preserves extended attributes and permissions
+                result = subprocess.run([
+                    "ditto", str(source), str(destination)
+                ], capture_output=True, text=True, timeout=300)
+                
+                if result.returncode == 0:
+                    # Verify the copy
+                    if self._verify_app_copy(source, destination):
+                        # Remove the original
+                        shutil.rmtree(str(source))
+                        return True
+                    else:
+                        shutil.rmtree(str(destination), ignore_errors=True)
+                        raise Exception("ditto copy verification failed")
+                else:
+                    raise Exception(f"ditto failed: {result.stderr}")
+                    
+            except Exception as e:
+                console.print(f"[dim]ditto approach failed: {e}[/dim]")
+                raise Exception("All move methods failed")
+
+        except Exception as e:
+            console.print(f"[red]All move methods failed for {source.name}: {e}[/red]")
+            return False
+
+    def _verify_app_copy(self, source: Path, destination: Path) -> bool:
+        """Verify that an app copy was successful by checking key files."""
+        try:
+            # Check if destination exists
+            if not destination.exists():
+                return False
+            
+            # Check for essential app bundle files
+            info_plist_source = source / "Contents" / "Info.plist"
+            info_plist_dest = destination / "Contents" / "Info.plist"
+            
+            if not (info_plist_source.exists() and info_plist_dest.exists()):
+                return False
+            
+            # Quick size comparison (should be roughly the same)
+            source_size = sum(f.stat().st_size for f in source.rglob('*') if f.is_file())
+            dest_size = sum(f.stat().st_size for f in destination.rglob('*') if f.is_file())
+            
+            # Allow for small differences due to metadata
+            size_diff = abs(source_size - dest_size)
+            if size_diff > source_size * 0.01:  # More than 1% difference
+                console.print(f"[yellow]⚠[/yellow] Size difference detected: {size_diff} bytes")
+                return False
+            
+            return True
+            
+        except Exception as e:
+            console.print(f"[yellow]⚠[/yellow] Copy verification failed: {e}")
             return False
 
     def _is_symlink_or_alias(self, app_path: Path) -> bool:
