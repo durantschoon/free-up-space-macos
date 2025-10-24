@@ -86,7 +86,7 @@ class SpaceManager:
         self.volumes_dir = Path("/Volumes")
 
         # Applications that should never be moved due to system integration or security
-        self.blacklisted_apps = {
+        self.protected_apps = {
             "1Password.app",
             # Add more apps here as needed
         }
@@ -105,10 +105,10 @@ class SpaceManager:
             try:
                 for app_path in self.applications_dir.iterdir():
                     if app_path.is_dir() and app_path.suffix == ".app":
-                        # Skip blacklisted applications
-                        if app_path.name in self.blacklisted_apps:
+                        # Skip protected applications
+                        if app_path.name in self.protected_apps:
                             console.print(
-                                f"[dim]Skipping {app_path.name} (blacklisted)[/dim]"
+                                f"[dim]Skipping {app_path.name} (protected)[/dim]"
                             )
                             continue
                         apps.append(AppInfo(app_path))
@@ -244,21 +244,21 @@ class SpaceManager:
 
         return volumes
 
-    def is_app_blacklisted(self, app_path: Path) -> bool:
-        """Check if an application is blacklisted and should not be moved."""
-        return app_path.name in self.blacklisted_apps
+    def is_app_protected(self, app_path: Path) -> bool:
+        """Check if an application is protected and should not be moved."""
+        return app_path.name in self.protected_apps
 
-    def get_blacklisted_apps(self) -> List[str]:
-        """Get list of blacklisted application names."""
-        return list(self.blacklisted_apps)
+    def get_protected_apps(self) -> List[str]:
+        """Get list of protected application names."""
+        return list(self.protected_apps)
 
-    def display_blacklist_info(self) -> None:
-        """Display information about blacklisted applications."""
-        if self.blacklisted_apps:
+    def display_protected_apps_info(self) -> None:
+        """Display information about protected applications."""
+        if self.protected_apps:
             console.print(
                 f"\n[bold cyan]🔒 Protected Applications (will not be moved):[/bold cyan]"
             )
-            for app_name in sorted(self.blacklisted_apps):
+            for app_name in sorted(self.protected_apps):
                 console.print(f"[dim]  • {app_name}[/dim]")
             console.print(
                 f"[dim]These apps have system integration or security features that require them to stay in /Applications[/dim]"
@@ -370,10 +370,10 @@ class SpaceManager:
                 try:
                     destination = backup_folder / app.path.name
 
-                    # Check if app is blacklisted
-                    if self.is_app_blacklisted(app.path):
+                    # Check if app is protected
+                    if self.is_app_protected(app.path):
                         console.print(
-                            f"[yellow]⚠[/yellow] {app.name} is blacklisted and cannot be moved"
+                            f"[yellow]⚠[/yellow] {app.name} is protected and cannot be moved"
                         )
                         failed_apps.append(app)
                         continue
@@ -1716,8 +1716,8 @@ Smart Restore Mode:
             console.print("[red]No applications found in /Applications[/red]")
             return
 
-        # Display blacklist information
-        manager.display_blacklist_info()
+        # Display protected apps information
+        manager.display_protected_apps_info()
 
         # Select apps to move
         selected_apps, space_to_free, current_free = (
