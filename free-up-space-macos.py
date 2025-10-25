@@ -78,12 +78,229 @@ class AppInfo:
         return f"{self.name} ({self.size_gb:.2f} GB)"
 
 
+class TimeManagementStrategy:
+    """Handles Time Machine-based application management."""
+
+    def __init__(self):
+        self.tm_volume = None
+        self.last_backup_time = None
+
+    def check_availability(self) -> bool:
+        """Check if Time Machine is configured and has backups available."""
+        import subprocess
+
+        try:
+            # Check if Time Machine is enabled
+            result = subprocess.run(
+                ["tmutil", "destinationinfo"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+
+            # If tmutil returns 0 and has output, TM is configured
+            if result.returncode == 0 and result.stdout.strip():
+                return True
+
+            return False
+        except Exception:
+            return False
+
+    def find_backup_volume(self) -> Optional[Path]:
+        """Find the Time Machine backup volume."""
+        import subprocess
+
+        try:
+            # Try to get destination info
+            result = subprocess.run(
+                ["tmutil", "destinationinfo"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+
+            if result.returncode == 0:
+                # Parse output to find mount point
+                for line in result.stdout.split('\n'):
+                    if 'Mount Point' in line:
+                        mount_point = line.split(':', 1)[1].strip()
+                        self.tm_volume = Path(mount_point)
+                        return self.tm_volume
+
+            # Fallback: Look for common TM volume patterns
+            volumes_dir = Path("/Volumes")
+            for vol in volumes_dir.iterdir():
+                if vol.is_dir():
+                    # Check for .backupdb or APFS TM indicators
+                    backupdb = vol / "Backups.backupdb"
+                    if backupdb.exists():
+                        self.tm_volume = vol
+                        return vol
+
+                    # Check for APFS TM snapshot indicators
+                    if "Time Machine" in vol.name or "Backup" in vol.name:
+                        # Try to verify it's actually a TM volume
+                        result = subprocess.run(
+                            ["tmutil", "destinationinfo"],
+                            capture_output=True,
+                            text=True
+                        )
+                        if str(vol) in result.stdout:
+                            self.tm_volume = vol
+                            return vol
+
+            return None
+        except Exception:
+            return None
+
+    def get_last_backup_time(self) -> Optional[datetime]:
+        """Get the timestamp of the last Time Machine backup."""
+        import subprocess
+
+        try:
+            result = subprocess.run(
+                ["tmutil", "latestbackup"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+
+            if result.returncode == 0:
+                # The output is a path like: /Volumes/.../2024-10-25-123456
+                backup_path = result.stdout.strip()
+
+                # Try to extract date from path
+                import re
+                match = re.search(r'(\d{4}-\d{2}-\d{2})-(\d{6})', backup_path)
+                if match:
+                    date_str = match.group(1)
+                    time_str = match.group(2)
+                    # Parse into datetime
+                    dt_str = f"{date_str} {time_str[:2]}:{time_str[2:4]}:{time_str[4:6]}"
+                    self.last_backup_time = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
+                    return self.last_backup_time
+
+            return None
+        except Exception:
+            return None
+
+    def verify_apps_in_backup(self, apps: List[AppInfo]) -> List[AppInfo]:
+        """
+        Guide user to verify which apps exist in Time Machine backup.
+        Returns list of apps confirmed to be in backup.
+        """
+        console.print("\n[bold yellow]⚠️  IMPORTANT: Time Machine Verification Required[/bold yellow]\n")
+        console.print(
+            "Before deleting apps, you need to verify they exist in Time Machine:\n"
+        )
+        console.print("1. Click Time Machine icon in menu bar")
+        console.print("2. Select 'Enter Time Machine' or 'Browse Time Machine Backups'")
+        console.print("3. Navigate to /Applications folder")
+        console.print("4. Go back a few days in time (before recent changes)")
+        console.print("5. Verify each app below exists in your backups\n")
+
+        input("Press ENTER when ready to verify apps...")
+        console.print()
+
+        verified_apps = []
+
+        console.print("[bold]Verify each app exists in Time Machine backup:[/bold]\n")
+
+        for app in apps:
+            response = Confirm.ask(
+                f"  {app.name} ({app.size_gb:.2f} GB) - Exists in Time Machine?",
+                default=False
+            )
+
+            if response:
+                verified_apps.append(app)
+                console.print(f"  [green]✓[/green] {app.name} marked for deletion (verified in TM)")
+            else:
+                console.print(f"  [yellow]⚠[/yellow] {app.name} skipped (not in TM or not verified)")
+
+        return verified_apps
+
+    def delete_verified_apps(self, apps: List[AppInfo]) -> bool:
+        """Delete apps that have been verified to exist in Time Machine."""
+        import subprocess
+
+        console.print(f"\n[bold]Deleting {len(apps)} verified applications...[/bold]\n")
+
+        success_count = 0
+        failed_apps = []
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console,
+        ) as progress:
+
+            for app in apps:
+                task = progress.add_task(f"Deleting {app.name}...", total=100)
+
+                try:
+                    # Remove any flags that might prevent deletion
+                    progress.update(task, completed=25)
+                    subprocess.run(
+                        ["chflags", "-R", "nouchg", str(app.path)],
+                        capture_output=True,
+                        text=True
+                    )
+                    subprocess.run(
+                        ["chflags", "-R", "noschg", str(app.path)],
+                        capture_output=True,
+                        text=True
+                    )
+
+                    # Delete the app
+                    progress.update(task, completed=50)
+                    shutil.rmtree(app.path)
+
+                    progress.update(task, completed=100)
+                    console.print(f"[green]✓[/green] Deleted {app.name}")
+                    success_count += 1
+
+                except Exception as e:
+                    console.print(f"[red]✗[/red] Failed to delete {app.name}: {e}")
+                    failed_apps.append(app.name)
+                    progress.update(task, completed=100)
+
+        console.print()
+
+        if failed_apps:
+            console.print(f"[yellow]⚠[/yellow] Failed to delete {len(failed_apps)} apps:")
+            for app_name in failed_apps:
+                console.print(f"  - {app_name}")
+            console.print("\nYou may need to delete these manually.")
+            return False
+
+        return success_count == len(apps)
+
+    def guide_restoration(self) -> None:
+        """Provide step-by-step guide for restoring apps from Time Machine."""
+        console.print("\n[bold cyan]═══════════════════════════════════════════════════════[/bold cyan]")
+        console.print("[bold]To Restore Apps from Time Machine:[/bold]\n")
+        console.print("1. Click the Time Machine icon in your menu bar")
+        console.print("   (or use Spotlight to search 'Time Machine')")
+        console.print("2. Select 'Enter Time Machine' or 'Browse Time Machine Backups'")
+        console.print("3. Navigate to /Applications folder")
+        console.print("4. Go back in time to find the apps you want")
+        console.print("5. Select the apps you want to restore")
+        console.print("6. Click the 'Restore' button")
+        console.print("7. Time Machine will restore with correct permissions!\n")
+        console.print("[dim]Note: You can also run this script with --restore-from-tm[/dim]")
+        console.print("[bold cyan]═══════════════════════════════════════════════════════[/bold cyan]\n")
+
+
 class SpaceManager:
     """Main class for managing application storage."""
 
     def __init__(self):
         self.applications_dir = Path("/Applications")
         self.volumes_dir = Path("/Volumes")
+        self.tm_strategy = TimeManagementStrategy()
 
         # Applications that should never be moved due to system integration or security
         self.protected_apps = {
@@ -403,12 +620,21 @@ class SpaceManager:
         """Remove extended attributes from a file or directory."""
         try:
             # Use xattr to remove all extended attributes
+            # Note: macOS xattr doesn't support -r flag, use -c only on each file
             import subprocess
 
-            result = subprocess.run(
-                ["xattr", "-cr", str(path)], capture_output=True, text=True
+            # Clear attributes on the main path
+            subprocess.run(
+                ["xattr", "-c", str(path)], capture_output=True, text=True
             )
-            return result.returncode == 0
+
+            # Recursively clear attributes on all files inside (suppress errors for protected files)
+            subprocess.run(
+                ["find", str(path), "-exec", "xattr", "-c", "{}", ";"],
+                capture_output=True,
+                text=True
+            )
+            return True
         except Exception:
             return False
 
@@ -1640,6 +1866,24 @@ Smart Restore Mode:
         help="Show top N largest apps and ask how many to fix permissions for (default: 15)",
     )
 
+    parser.add_argument(
+        "--use-external-drive",
+        action="store_true",
+        help="Force using external drive method (skip Time Machine check)",
+    )
+
+    parser.add_argument(
+        "--restore-from-tm",
+        action="store_true",
+        help="Interactive Time Machine restoration guide",
+    )
+
+    parser.add_argument(
+        "--check-tm-status",
+        action="store_true",
+        help="Check Time Machine availability and status",
+    )
+
     args = parser.parse_args()
 
     # Display welcome banner
@@ -1933,8 +2177,69 @@ Smart Restore Mode:
             sys.exit(1)
         return
 
+    # Handle Time Machine status check
+    if args.check_tm_status:
+        console.print("\n[bold]Checking Time Machine status...[/bold]\n")
+
+        if manager.tm_strategy.check_availability():
+            console.print("[green]✓ Time Machine is available[/green]")
+
+            tm_volume = manager.tm_strategy.find_backup_volume()
+            if tm_volume:
+                console.print(f"[green]✓ Backup volume: {tm_volume}[/green]")
+
+            last_backup = manager.tm_strategy.get_last_backup_time()
+            if last_backup:
+                console.print(f"[green]✓ Last backup: {last_backup.strftime('%Y-%m-%d %H:%M:%S')}[/green]")
+            else:
+                console.print("[yellow]⚠ Could not determine last backup time[/yellow]")
+        else:
+            console.print("[red]✗ Time Machine is not available[/red]")
+            console.print("[dim]Time Machine may not be configured or accessible.[/dim]")
+
+        return
+
+    # Handle Time Machine restoration
+    if args.restore_from_tm:
+        console.print("\n[bold]Time Machine Restoration Guide[/bold]\n")
+        manager.tm_strategy.guide_restoration()
+        return
+
     # Interactive mode
     try:
+        # Check Time Machine availability (unless --use-external-drive is specified)
+        use_time_machine = False
+        if not args.use_external_drive:
+            console.print("\n[bold]🔍 Checking Time Machine availability...[/bold]")
+            if manager.tm_strategy.check_availability():
+                console.print("[green]✓ Time Machine is active[/green]")
+
+                tm_volume = manager.tm_strategy.find_backup_volume()
+                if tm_volume:
+                    console.print(f"[green]✓ Backup destination: {tm_volume}[/green]")
+
+                last_backup = manager.tm_strategy.get_last_backup_time()
+                if last_backup:
+                    import time
+                    hours_ago = (datetime.now() - last_backup).total_seconds() / 3600
+                    if hours_ago < 24:
+                        console.print(f"[green]✓ Last backup: {int(hours_ago)} hours ago[/green]")
+                    else:
+                        days_ago = int(hours_ago / 24)
+                        console.print(f"[yellow]⚠ Last backup: {days_ago} days ago[/yellow]")
+
+                console.print("\n[bold cyan]Time Machine Detected![/bold cyan]")
+                console.print("[dim]You can delete apps and restore them from Time Machine later.")
+                console.print("This is safer than copying to external drives (no corruption, correct permissions).[/dim]\n")
+
+                use_time_machine = Confirm.ask(
+                    "Use Time Machine method (recommended)?",
+                    default=True
+                )
+            else:
+                console.print("[yellow]⚠ Time Machine not available[/yellow]")
+                console.print("[dim]Falling back to external drive method...[/dim]\n")
+
         # Get current free space and show it
         current_free = manager.get_current_free_space()
         console.print(f"\n[bold]Current free space: {current_free:.2f} GB[/bold]")
@@ -2011,6 +2316,43 @@ Smart Restore Mode:
             f"[dim]This will free up {total_size:.2f} GB, giving you {current_free + total_size:.2f} GB total free space[/dim]"
         )
         manager.display_apps_table(selected_apps, "Applications to Move")
+
+        # Time Machine workflow
+        if use_time_machine:
+            # Verify apps in Time Machine backup
+            verified_apps = manager.tm_strategy.verify_apps_in_backup(selected_apps)
+
+            if not verified_apps:
+                console.print("\n[yellow]⚠ No apps were verified in Time Machine backup[/yellow]")
+                console.print("[dim]Falling back to external drive method...[/dim]\n")
+                use_time_machine = False
+            else:
+                total_verified_size = sum(app.size_gb for app in verified_apps)
+
+                # Show final confirmation
+                console.print(f"\n[bold yellow]⚠️  WARNING: This will DELETE the following apps:[/bold yellow]\n")
+                for app in verified_apps:
+                    console.print(f"  • {app.name} ({app.size_gb:.2f} GB)")
+
+                console.print(f"\n[green]✓ These apps are backed up in Time Machine[/green]")
+                console.print(f"[green]✓ You can restore them anytime[/green]")
+                console.print(f"[green]✓ This will free up {total_verified_size:.2f} GB[/green]\n")
+
+                if Confirm.ask("Proceed with deletion?", default=False):
+                    if manager.tm_strategy.delete_verified_apps(verified_apps):
+                        new_free = manager.get_current_free_space()
+                        console.print(f"\n[bold green]✓ Success! Freed {total_verified_size:.2f} GB[/bold green]")
+                        console.print(f"[bold]New free space: {new_free:.2f} GB[/bold]\n")
+
+                        # Show restoration guide
+                        manager.tm_strategy.guide_restoration()
+                    else:
+                        console.print("\n[red]✗ Some apps could not be deleted[/red]")
+                        console.print("[dim]You may need to delete them manually[/dim]")
+                else:
+                    console.print("\nOperation cancelled.")
+
+                return
 
         # Select volume first (before asking about method)
         volume_selection = manager.select_volume()

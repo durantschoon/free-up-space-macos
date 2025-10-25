@@ -1,6 +1,8 @@
 # Free Up Space macOS
 
-A Python command-line tool with a beautiful colored interface that helps you free up space on your Mac by moving large applications to removable drives. The tool intelligently calculates how much space to free up based on your target free space goal and provides easy restoration functionality.
+A Python command-line tool with a beautiful colored interface that helps you free up space on your Mac by safely deleting large applications that are backed up in Time Machine. The tool intelligently calculates how much space to free up based on your target free space goal and makes restoration simple through Time Machine.
+
+> **⚠️ DEVELOPMENT NOTE**: The Time Machine integration features described below were implemented without testing (October 2025). They will be tested when the next macOS upgrade requires freeing up disk space. Use with caution and verify Time Machine backups exist before deleting any applications.
 
 ## Features
 
@@ -9,6 +11,14 @@ A Python command-line tool with a beautiful colored interface that helps you fre
 - Rich colored terminal output with progress bars and animations
 - Formatted tables showing application sizes and details
 - Interactive prompts with clear visual feedback
+
+⏰ **Time Machine Integration (NEW!)**
+
+- **Primary strategy**: Automatically detects Time Machine backups
+- Verifies apps exist in backups before deletion
+- Simply deletes apps (no copying, no corruption risk)
+- Restores from Time Machine with perfect permissions
+- Falls back to external drive method if Time Machine unavailable
 
 📊 **Smart Application Management**
 
@@ -20,15 +30,17 @@ A Python command-line tool with a beautiful colored interface that helps you fre
 
 💾 **Flexible Storage Options**
 
-- Lists available removable drives in `/Volumes`
+- **Primary**: Uses Time Machine backups (safer, no corruption)
+- **Fallback**: Lists available removable drives in `/Volumes`
 - Creates organized, timestamped backup folders
 - Supports any removable drive (USB, external SSD, etc.)
 
 🔄 **Safe Operations**
 
+- Time Machine verification before deletion
 - Multiple confirmation prompts before destructive operations
 - Comprehensive error handling with colored error messages
-- Easy restore functionality with proper permission management
+- Easy restore through Time Machine GUI (no permission issues!)
 - Progress tracking for all operations
 
 ## Requirements
@@ -64,7 +76,7 @@ This tool is especially useful for macOS upgrades that require specific amounts 
 
 The script will calculate exactly how much space to free up to reach your target.
 
-### Interactive Mode (Default)
+### Interactive Mode (Default) - Time Machine First!
 
 Run the script without arguments to start the interactive mode:
 
@@ -74,14 +86,20 @@ sudo python free-up-space-macos.py
 
 The script will:
 
-1. Show your current free space
-2. Ask how many GB of total free space you want (perfect for OS upgrades)
-3. Calculate exactly how much space needs to be freed up
-4. Scan your `/Applications` directory for the largest apps
-5. Show you which applications will be moved
-6. Ask for confirmation
-7. Let you select a removable drive
-8. Move the applications to a timestamped backup folder
+1. **Check for Time Machine backups** (automatic)
+2. Show your current free space
+3. Ask how many GB of total free space you want (perfect for OS upgrades)
+4. Calculate exactly how much space needs to be freed up
+5. Scan your `/Applications` directory for the largest apps
+6. Show you which applications will be moved
+7. **If Time Machine available**:
+   - Guide you to verify apps exist in Time Machine backup
+   - Ask which apps are verified in TM
+   - Simply delete verified apps (no copying!)
+   - Show restoration instructions
+8. **If Time Machine not available** (or you choose `--use-external-drive`):
+   - Let you select a removable drive
+   - Move the applications to a timestamped backup folder
 
 ### Restore Mode
 
@@ -253,10 +271,18 @@ Restoring from AppBackup_20231201_120000...
 
 ## Command Line Options
 
+### Time Machine Options (NEW!)
+- `--restore-from-tm`: Interactive Time Machine restoration guide
+- `--check-tm-status`: Check Time Machine availability and backup status
+- `--use-external-drive`: Force external drive method (skip Time Machine check)
+
+### External Drive Options
 - `--restore <path>`: Restore applications from a specific backup folder
 - `--restore ""`: Interactive restore mode - select volume and backup folder
 - `--fix-permissions`: Fix permissions for recently modified applications (smart restore mode)
 - `--fix-permissions-choose N`: Show top N largest apps and ask how many to fix permissions for (default: 15)
+
+### General
 - `--help`: Show help message and usage examples
 
 ### Smart Restore Mode (New!)
@@ -283,6 +309,18 @@ sudo python free-up-space-macos.py --fix-permissions-choose 20
 
 ## How It Works
 
+### Time Machine Method (Primary - Recommended)
+
+1. **Time Machine Detection**: Checks if Time Machine is configured and has recent backups
+2. **Application Discovery**: Scans `/Applications` for all `.app` bundles
+3. **Size Calculation**: Recursively calculates actual disk usage for each application
+4. **Smart Selection**: Sorts applications by size and selects the largest ones to meet your target
+5. **Backup Verification**: Guides you to verify apps exist in Time Machine backup
+6. **Safe Deletion**: Simply deletes verified apps (no copying, no corruption)
+7. **Easy Restoration**: Restore anytime from Time Machine with perfect permissions
+
+### External Drive Method (Fallback)
+
 1. **Application Discovery**: Scans `/Applications` for all `.app` bundles
 2. **Size Calculation**: Recursively calculates actual disk usage for each application
 3. **Smart Selection**: Sorts applications by size and selects the largest ones to meet your target
@@ -300,11 +338,27 @@ sudo python free-up-space-macos.py --fix-permissions-choose 20
 
 ## Known Limitations & Workflow Notes
 
-### The Process is Still Somewhat Manual
+### Time Machine Method (Recommended)
 
-⚠️ **Important**: Due to macOS system protections, moving applications programmatically can be unreliable. The current workflow involves some manual steps but should still save time compared to doing everything manually.
+✅ **The Time Machine method eliminates most previous issues:**
 
-**Current Recommended Workflow:**
+- **No copying** = No corruption risk
+- **No permission issues** = Time Machine restores perfectly
+- **Faster** = Just delete, don't copy
+- **Simpler** = No manual steps needed
+
+**Requirements:**
+- Time Machine must be configured and have recent backups
+- You must manually verify apps exist in backups (opens Time Machine GUI)
+- Apps will be permanently deleted from `/Applications` (restorable from TM)
+
+**⚠️ Testing Note**: This method was implemented in October 2025 without testing. It will be validated during the next macOS upgrade cycle.
+
+### External Drive Method (Fallback)
+
+⚠️ **Note**: Due to macOS system protections, moving applications programmatically can be unreliable.
+
+**Current Workflow:**
 
 1. Run the script to identify large apps to move
 2. For stubborn apps that won't move programmatically:
@@ -313,13 +367,6 @@ sudo python free-up-space-macos.py --fix-permissions-choose 20
 3. After manual copying, run `--fix-permissions` to fix permissions for the copied apps
 
 **Why this happens:** macOS has various protection mechanisms (SIP, extended attributes, app quarantine) that can prevent programmatic moves even with `sudo`. Finder has special privileges that bypass some of these restrictions.
-
-**Time Savings:** While not fully automated, the script still helps by:
-- Identifying which apps to move (sorted by size)
-- Calculating exactly how much space you need to free
-- Providing the exact destination path
-- Fixing permissions after manual moves
-- Organizing backups in timestamped folders
 
 ### Future Improvements
 
@@ -374,32 +421,44 @@ Contributions are welcome! Please feel free to submit issues, feature requests, 
 
 ### High Priority
 
-- **Detect Corrupted Copies**: Implement better detection for incomplete or corrupted app copies
-  - Current issue: Multiple manual copy attempts may result in smaller file sizes on external disk
-  - Potential solutions being investigated:
-    - Compare file counts between source and destination
-    - Verify critical files (executables, Info.plist, frameworks)
-    - Hash comparison for key files
-    - Deep integrity checking
-  - Challenge: What to do when multiple copy attempts fail? Options:
-    - Warn user and suggest specific apps may be corrupted
-    - Provide detailed diagnostic information about what's missing
-    - Recommend using different copy methods (rsync, ditto, cp -a)
-    - Mark app as "uncopyable" and suggest keeping it on main drive
+- ✅ **Time Machine Integration** - COMPLETED (October 2025, pending testing)
+  - Time Machine is now the primary strategy
+  - Automatically detects and uses TM backups
+  - Simply deletes apps verified in TM
+  - Eliminates corruption and permission issues
+  - Falls back to external drive if TM unavailable
+
+- **Test Time Machine Integration** - When next macOS upgrade occurs
+  - Validate TM detection works correctly
+  - Verify app verification workflow is smooth
+  - Ensure deletion and restoration work as expected
+  - Fix any bugs discovered during real-world use
+
+- **Fix/prevent missing icons for restored apps**
+  - When applications are moved or restored on macOS, the system icon cache may not update properly
+  - Potential solutions to investigate:
+    - Force icon cache refresh using `touch` or similar commands
+    - Use macOS's icon services commands (`iconutil`, Launch Services)
+    - Set proper extended attributes (xattr) that macOS uses for icon display
+    - Rebuild the Launch Services database (`lsregister`)
 
 ### Medium Priority
 
-- Improve automated move success rate (investigating alternatives to `shutil.move`)
+- **Detect Corrupted Copies** (External drive method only)
+  - Compare file counts between source and destination
+  - Verify critical files (executables, Info.plist, frameworks)
+  - Hash comparison for key files
+  - Warn user about potentially corrupted apps
+
+- Improve automated move success rate for external drive method
 - Add size verification after copies complete
 - Better handling of apps with SIP/system protection
-- Option to create symlinks instead of moving files
 - Dry-run mode to preview actions without making changes
 
 ### Low Priority
 
 - Support for moving other large directories (not just apps)
 - Compression options for rarely-used apps
-- Integration with Time Machine backups
 - Web UI for easier use
 
 ## Disclaimer

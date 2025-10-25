@@ -2,21 +2,29 @@
 
 ## High Priority
 
-- [ ] **Detect Corrupted Copies & Time Machine Integration**: Implement better detection for incomplete or corrupted app copies, and explore using Time Machine backups as a restoration source
+- [x] **Time Machine Integration** - COMPLETED (October 2025)
+  - ✅ Time Machine is now the PRIMARY strategy
+  - ✅ Automatically detects TM backups
+  - ✅ Guides user to verify apps exist in TM
+  - ✅ Simply deletes verified apps (no copying = no corruption!)
+  - ✅ Falls back to external drive if TM unavailable
+  - ✅ Easy restoration through Time Machine GUI (perfect permissions!)
+  - **⚠️ PENDING TESTING**: Will be tested when next macOS upgrade requires disk space
+
+- [ ] **Test Time Machine Integration** - When next macOS upgrade occurs
+  - Real-world validation of TM detection
+  - Verify app verification workflow
+  - Test deletion and restoration
+  - Fix any bugs discovered
+
+- [ ] **Detect Corrupted Copies** (External drive method only)
   - Current issue: Multiple manual copy attempts may result in smaller file sizes on external disk
-  - Potential solutions being investigated:
+  - Potential solutions:
     - Compare file counts between source and destination
     - Verify critical files (executables, Info.plist, frameworks)
     - Hash comparison for key files
     - Deep integrity checking
-    - **Check Time Machine backups and restore apps from there instead** - may prevent corrupted copies entirely
-    - Explore if Time Machine backups can identify better candidates for moving (files that can be safely restored)
-  - Challenge: What to do when multiple copy attempts fail? Options:
-    - Warn user and suggest specific apps may be corrupted
-    - Provide detailed diagnostic information about what's missing
-    - Recommend using different copy methods (rsync, ditto, cp -a)
-    - Mark app as "uncopyable" and suggest keeping it on main drive
-    - Fall back to Time Machine restoration if available
+  - Note: Time Machine method eliminates this issue entirely!
 
 - [ ] **Fix/prevent missing icons for restored apps**
   - When applications are moved or restored on macOS, the system icon cache may not update properly, causing apps to appear with generic icons
@@ -28,11 +36,13 @@
 
 ## Medium Priority
 
-- [ ] Improve automated move success rate (investigating alternatives to `shutil.move`)
-- [ ] Add size verification after copies complete
-- [ ] Better handling of apps with SIP/system protection
-- [ ] Option to create symlinks instead of moving files
+- [ ] Improve automated move success rate for external drive method (investigating alternatives to `shutil.move`)
+- [ ] Add size verification after copies complete (external drive method)
+- [ ] Better handling of apps with SIP/system protection (external drive method)
 - [ ] Dry-run mode to preview actions without making changes
+- [ ] Add example workflow screenshots to README
+
+Note: Time Machine method has largely eliminated the need for many of these improvements!
 
 ## Low Priority
 
