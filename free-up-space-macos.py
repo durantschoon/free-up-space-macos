@@ -272,6 +272,96 @@ class SpaceManager:
             console.print("[red]No removable drives found in /Volumes[/red]")
             return None
 
+        # Check for rPi_1T volume specifically
+        rpi_volume = None
+        for volume in volumes:
+            if volume.name == "rPi_1T":
+                rpi_volume = volume
+                break
+
+        if rpi_volume:
+            # Check for existing backup folders on rPi_1T
+            existing_backups = self.find_backup_folders(rpi_volume)
+
+            if len(existing_backups) == 1:
+                # Found exactly one backup folder on rPi_1T
+                console.print(f"\n[bold]Found existing backup folder on rPi_1T:[/bold]")
+                console.print(f"[green]{existing_backups[0].name}[/green]")
+
+                # Count apps in the existing folder
+                app_count = len(
+                    [
+                        f
+                        for f in existing_backups[0].iterdir()
+                        if f.is_dir() and f.suffix == ".app"
+                    ]
+                )
+                console.print(f"[dim]Contains {app_count} applications[/dim]")
+
+                console.print("\n[bold]Choose an option:[/bold]")
+                console.print("1. Reuse existing backup folder")
+                console.print("2. Create new backup folder on rPi_1T")
+                console.print("3. Select different volume")
+
+                while True:
+                    try:
+                        choice = Prompt.ask("Select option (number)", default="1")
+                        if choice == "1":
+                            # Reuse existing folder
+                            return rpi_volume, existing_backups[0]
+                        elif choice == "2":
+                            # Create new folder on rPi_1T
+                            return rpi_volume, None
+                        elif choice == "3":
+                            # Show other volumes
+                            break
+                        else:
+                            console.print(
+                                "[red]Invalid selection. Please try again.[/red]"
+                            )
+                    except ValueError:
+                        console.print("[red]Please enter a valid number.[/red]")
+            elif len(existing_backups) > 1:
+                # Multiple backup folders on rPi_1T - show them
+                console.print(
+                    f"\n[bold]Found {len(existing_backups)} backup folders on rPi_1T:[/bold]"
+                )
+                for i, folder in enumerate(existing_backups, 1):
+                    app_count = len(
+                        [
+                            f
+                            for f in folder.iterdir()
+                            if f.is_dir() and f.suffix == ".app"
+                        ]
+                    )
+                    console.print(f"{i}. {folder.name} ({app_count} apps)")
+
+                console.print(
+                    f"{len(existing_backups) + 1}. Create new backup folder on rPi_1T"
+                )
+                console.print(f"{len(existing_backups) + 2}. Select different volume")
+
+                while True:
+                    try:
+                        choice = Prompt.ask("Select option (number)", default="1")
+                        choice_idx = int(choice) - 1
+                        if 0 <= choice_idx < len(existing_backups):
+                            # Reuse selected existing folder
+                            return rpi_volume, existing_backups[choice_idx]
+                        elif choice_idx == len(existing_backups):
+                            # Create new folder on rPi_1T
+                            return rpi_volume, None
+                        elif choice_idx == len(existing_backups) + 1:
+                            # Show other volumes
+                            break
+                        else:
+                            console.print(
+                                "[red]Invalid selection. Please try again.[/red]"
+                            )
+                    except ValueError:
+                        console.print("[red]Please enter a valid number.[/red]")
+
+        # Show all available volumes (including rPi_1T if no existing backups or user chose different volume)
         console.print("\n[bold]Available volumes:[/bold]")
         for i, volume in enumerate(volumes, 1):
             console.print(f"{i}. {volume.name} ({volume})")
@@ -281,14 +371,22 @@ class SpaceManager:
                 choice = Prompt.ask("Select volume (number)", default="1")
                 choice_idx = int(choice) - 1
                 if 0 <= choice_idx < len(volumes):
-                    return volumes[choice_idx]
+                    return volumes[choice_idx], None
                 else:
                     console.print("[red]Invalid selection. Please try again.[/red]")
             except ValueError:
                 console.print("[red]Please enter a valid number.[/red]")
 
-    def create_backup_folder(self, volume: Path) -> Path:
-        """Create a timestamped backup folder on the selected volume."""
+    def create_backup_folder(
+        self, volume: Path, existing_folder: Optional[Path] = None
+    ) -> Path:
+        """Create a timestamped backup folder on the selected volume, or reuse existing folder."""
+        if existing_folder:
+            console.print(
+                f"[green]Reusing existing backup folder: {existing_folder}[/green]"
+            )
+            return existing_folder
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_folder = volume / f"AppBackup_{timestamp}"
         backup_folder.mkdir(exist_ok=True)
@@ -1521,10 +1619,12 @@ Smart Restore Mode:
             console.print("[bold]Interactive restore mode[/bold]")
             console.print("Select a volume to restore from:")
 
-            volume = manager.select_volume()
-            if not volume:
+            volume_selection = manager.select_volume()
+            if not volume_selection:
                 console.print("No volume selected. Restore cancelled.")
                 return
+
+            volume, _ = volume_selection  # Ignore existing_folder for restore mode
 
             # Select backup folder
             backup_selection = manager.select_backup_folder(volume)
@@ -1768,14 +1868,21 @@ Smart Restore Mode:
             return
 
         # Select volume
-        volume = manager.select_volume()
-        if not volume:
+        volume_selection = manager.select_volume()
+        if not volume_selection:
             console.print("No volume selected. Operation cancelled.")
             return
 
+        volume, existing_folder = volume_selection
+
         # Create backup folder
-        backup_folder = manager.create_backup_folder(volume)
-        console.print(f"[green]Created backup folder: {backup_folder}[/green]")
+        backup_folder = manager.create_backup_folder(volume, existing_folder)
+        if existing_folder:
+            console.print(
+                f"[green]Using existing backup folder: {backup_folder}[/green]"
+            )
+        else:
+            console.print(f"[green]Created backup folder: {backup_folder}[/green]")
 
         # Move applications
         success, failed_apps = manager.move_apps_to_volume(selected_apps, backup_folder)
