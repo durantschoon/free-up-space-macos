@@ -255,7 +255,31 @@ Restoring from AppBackup_20231201_120000...
 
 - `--restore <path>`: Restore applications from a specific backup folder
 - `--restore ""`: Interactive restore mode - select volume and backup folder
+- `--fix-permissions`: Fix permissions for recently modified applications (smart restore mode)
+- `--fix-permissions-choose N`: Show top N largest apps and ask how many to fix permissions for (default: 15)
 - `--help`: Show help message and usage examples
+
+### Smart Restore Mode (New!)
+
+If you manually copy apps back to `/Applications` (e.g., by dragging and dropping in Finder), you may need to fix permissions:
+
+```bash
+sudo python free-up-space-macos.py --fix-permissions
+```
+
+This will:
+1. Look for apps modified in the last 24 hours
+2. If none found, show the top 15 largest apps with numbering
+3. Ask how many apps to fix (default: 12)
+4. Fix permissions automatically without additional confirmation
+
+You can also specify how many largest apps to show:
+
+```bash
+sudo python free-up-space-macos.py --fix-permissions-choose 20
+```
+
+**Note:** The numbered list makes it easy to count which apps you want to fix without manually counting rows.
 
 ## How It Works
 
@@ -273,6 +297,33 @@ Restoring from AppBackup_20231201_120000...
 - **Permission Checks**: Verifies access to directories before operations
 - **Progress Tracking**: Visual progress bars for long operations
 - **Backup Verification**: Checks backup folder contents before restoration
+
+## Known Limitations & Workflow Notes
+
+### The Process is Still Somewhat Manual
+
+⚠️ **Important**: Due to macOS system protections, moving applications programmatically can be unreliable. The current workflow involves some manual steps but should still save time compared to doing everything manually.
+
+**Current Recommended Workflow:**
+
+1. Run the script to identify large apps to move
+2. For stubborn apps that won't move programmatically:
+   - Use Finder to drag and drop apps to your external drive
+   - The script will show you which apps and where to move them
+3. After manual copying, run `--fix-permissions` to fix permissions for the copied apps
+
+**Why this happens:** macOS has various protection mechanisms (SIP, extended attributes, app quarantine) that can prevent programmatic moves even with `sudo`. Finder has special privileges that bypass some of these restrictions.
+
+**Time Savings:** While not fully automated, the script still helps by:
+- Identifying which apps to move (sorted by size)
+- Calculating exactly how much space you need to free
+- Providing the exact destination path
+- Fixing permissions after manual moves
+- Organizing backups in timestamped folders
+
+### Future Improvements
+
+See the [TODO section](#todo) below for planned enhancements.
 
 ## Troubleshooting
 
@@ -318,6 +369,38 @@ This project is open source. Feel free to modify and distribute according to you
 ## Contributing
 
 Contributions are welcome! Please feel free to submit issues, feature requests, or pull requests.
+
+## TODO / Future Improvements
+
+### High Priority
+
+- **Detect Corrupted Copies**: Implement better detection for incomplete or corrupted app copies
+  - Current issue: Multiple manual copy attempts may result in smaller file sizes on external disk
+  - Potential solutions being investigated:
+    - Compare file counts between source and destination
+    - Verify critical files (executables, Info.plist, frameworks)
+    - Hash comparison for key files
+    - Deep integrity checking
+  - Challenge: What to do when multiple copy attempts fail? Options:
+    - Warn user and suggest specific apps may be corrupted
+    - Provide detailed diagnostic information about what's missing
+    - Recommend using different copy methods (rsync, ditto, cp -a)
+    - Mark app as "uncopyable" and suggest keeping it on main drive
+
+### Medium Priority
+
+- Improve automated move success rate (investigating alternatives to `shutil.move`)
+- Add size verification after copies complete
+- Better handling of apps with SIP/system protection
+- Option to create symlinks instead of moving files
+- Dry-run mode to preview actions without making changes
+
+### Low Priority
+
+- Support for moving other large directories (not just apps)
+- Compression options for rarely-used apps
+- Integration with Time Machine backups
+- Web UI for easier use
 
 ## Disclaimer
 

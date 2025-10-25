@@ -215,15 +215,22 @@ class SpaceManager:
             except Exception:
                 pass
 
-    def display_apps_table(self, apps: List[AppInfo], title: str = "Applications"):
+    def display_apps_table(self, apps: List[AppInfo], title: str = "Applications", numbered: bool = False):
         """Display applications in a formatted table."""
         table = Table(title=title, box=box.ROUNDED)
+
+        if numbered:
+            table.add_column("#", style="dim", justify="right", width=4)
+
         table.add_column("Name", style="cyan", no_wrap=True)
         table.add_column("Size (GB)", style="magenta", justify="right")
         table.add_column("Path", style="dim")
 
-        for app in apps:
-            table.add_row(app.name, f"{app.size_gb:.2f}", str(app.path))
+        for idx, app in enumerate(apps, 1):
+            if numbered:
+                table.add_row(str(idx), app.name, f"{app.size_gb:.2f}", str(app.path))
+            else:
+                table.add_row(app.name, f"{app.size_gb:.2f}", str(app.path))
 
         console.print(table)
 
@@ -878,6 +885,45 @@ class SpaceManager:
         recent_apps.sort(key=lambda x: x.stat().st_mtime, reverse=True)
         return recent_apps
 
+    def get_largest_apps(self, top_n: int = 15) -> List[Path]:
+        """Get the top N largest apps in /Applications."""
+        apps_with_sizes = []
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Scanning applications...", total=None)
+
+            try:
+                for app_path in self.applications_dir.iterdir():
+                    if app_path.is_dir() and app_path.suffix == ".app":
+                        # Skip protected apps
+                        if app_path.name in self.protected_apps:
+                            console.print(
+                                f"[dim]Skipping {app_path.name} (protected)[/dim]"
+                            )
+                            continue
+
+                        # Filter out symlinks and aliases
+                        if self._is_symlink_or_alias(app_path):
+                            console.print(
+                                f"[dim]Skipping {app_path.name} (symlink/alias)[/dim]"
+                            )
+                            continue
+
+                        # Create AppInfo which calculates size
+                        app_info = AppInfo(app_path)
+                        if app_info.size_gb > 0:  # Only include apps with measurable size
+                            apps_with_sizes.append((app_path, app_info.size_gb))
+            except Exception as e:
+                console.print(f"[yellow]⚠[/yellow] Error scanning /Applications: {e}")
+
+        # Sort by size (largest first) and take top N
+        apps_with_sizes.sort(key=lambda x: x[1], reverse=True)
+        return [app for app, _ in apps_with_sizes[:top_n]]
+
     def _check_app_in_use(self, app_path: Path) -> bool:
         """Check if an app is currently in use by any process."""
         try:
@@ -1031,24 +1077,24 @@ class SpaceManager:
             if app_path.is_symlink():
                 return True
 
-            # Check if it's an alias by looking at the file size
-            # Real app bundles should be much larger than a few bytes
-            if app_path.stat().st_size < 1000:  # Less than 1KB is suspicious
-                return True
-
-            # Check if Contents directory exists and has reasonable size
+            # Check if Contents directory exists (essential for valid app bundles)
             contents_dir = app_path / "Contents"
             if not contents_dir.exists():
                 return True
 
             # Check if the app bundle has the expected structure
             info_plist = contents_dir / "Info.plist"
-            if not info_plist.exists() or info_plist.stat().st_size < 100:
+            if not info_plist.exists():
+                return True
+
+            # Check if Info.plist has reasonable content
+            if info_plist.stat().st_size < 100:
                 return True
 
             return False
         except Exception:
-            return True  # If we can't check, assume it's problematic
+            # If we can't check properly, be conservative and include it
+            return False
 
     def _get_real_app_size(self, app_path: Path) -> float:
         """Get the real size of an app bundle, handling symlinks and aliases."""
@@ -1587,6 +1633,13 @@ Smart Restore Mode:
         help="Fix permissions for recently modified applications in /Applications (smart restore mode)",
     )
 
+    parser.add_argument(
+        "--fix-permissions-choose",
+        type=int,
+        metavar="N",
+        help="Show top N largest apps and ask how many to fix permissions for (default: 15)",
+    )
+
     args = parser.parse_args()
 
     # Display welcome banner
@@ -1723,56 +1776,155 @@ Smart Restore Mode:
         return
 
     # Handle fix-permissions mode
-    if args.fix_permissions:
+    if args.fix_permissions or args.fix_permissions_choose is not None:
         console.print(
-            "[bold]Smart restore mode: Fixing permissions for recently copied applications[/bold]"
+            "[bold]Smart restore mode: Fixing permissions for applications[/bold]"
         )
         console.print(
             "[dim]Note: If apps appear 'in use', this is normal after copying - macOS may be indexing or scanning them[/dim]"
         )
 
-        # Find recently modified apps (within last 24 hours)
-        recent_apps = manager.find_recently_modified_apps(hours=24)
+        valid_apps_to_fix = []
 
-        if not recent_apps:
+        if args.fix_permissions_choose is not None:
+            # Show top N largest apps and ask how many to fix
+            top_n = args.fix_permissions_choose if args.fix_permissions_choose > 0 else 15
             console.print(
-                "[yellow]No recently modified applications found in /Applications[/yellow]"
+                f"\n[bold]Finding top {top_n} largest applications...[/bold]"
             )
-            console.print(
-                "[dim]If you manually copied apps, they may be older than 24 hours[/dim]"
-            )
-            return
+            largest_apps = manager.get_largest_apps(top_n=top_n)
 
-        # Filter to only valid app bundles
-        valid_recent_apps = []
-        for app in recent_apps:
-            if manager._check_app_integrity(app):
-                valid_recent_apps.append(app)
-            else:
+            if not largest_apps:
+                console.print("[red]No applications found in /Applications[/red]")
+                return
+
+            # Filter to only valid app bundles
+            for app in largest_apps:
+                if manager._check_app_integrity(app):
+                    valid_apps_to_fix.append(app)
+                else:
+                    console.print(
+                        f"[yellow]⚠[/yellow] {app.name}: App bundle is corrupted or incomplete"
+                    )
+
+            if not valid_apps_to_fix:
+                console.print("[red]No valid applications found[/red]")
+                return
+
+            console.print(
+                f"\n[bold]Top {len(valid_apps_to_fix)} largest applications:[/bold]"
+            )
+
+            # Display the apps with numbering
+            manager.display_apps_table(
+                [AppInfo(app) for app in valid_apps_to_fix],
+                "Largest Applications",
+                numbered=True
+            )
+
+            # Ask how many to fix
+            while True:
+                try:
+                    count_str = Prompt.ask(
+                        f"How many apps to fix permissions for? (1-{len(valid_apps_to_fix)})",
+                        default=str(min(12, len(valid_apps_to_fix)))
+                    )
+                    count = int(count_str)
+                    if 1 <= count <= len(valid_apps_to_fix):
+                        valid_apps_to_fix = valid_apps_to_fix[:count]
+                        break
+                    else:
+                        console.print(f"[red]Please enter a number between 1 and {len(valid_apps_to_fix)}[/red]")
+                except ValueError:
+                    console.print("[red]Please enter a valid number[/red]")
+
+        else:
+            # Original behavior: find recently modified apps
+            console.print("[dim]Looking for recently copied applications (last 24 hours)...[/dim]")
+            recent_apps = manager.find_recently_modified_apps(hours=24)
+
+            if not recent_apps:
+                # No recent apps found, fall back to showing largest apps
                 console.print(
-                    f"[yellow]⚠[/yellow] {app.name}: App bundle is corrupted or incomplete"
+                    "[yellow]No recently modified applications found in /Applications[/yellow]"
+                )
+                console.print(
+                    "[dim]Showing top 15 largest applications instead...[/dim]"
                 )
 
-        if not valid_recent_apps:
-            console.print("[red]No valid recently modified applications found[/red]")
-            return
+                largest_apps = manager.get_largest_apps(top_n=15)
 
-        console.print(
-            f"\n[bold]Found {len(valid_recent_apps)} recently modified applications:[/bold]"
-        )
+                if not largest_apps:
+                    console.print("[red]No applications found in /Applications[/red]")
+                    return
 
-        # Display what will be processed
-        manager.display_apps_table(
-            [AppInfo(app) for app in valid_recent_apps],
-            "Recently Modified Applications",
-        )
+                # Filter to only valid app bundles
+                for app in largest_apps:
+                    if manager._check_app_integrity(app):
+                        valid_apps_to_fix.append(app)
+                    else:
+                        console.print(
+                            f"[yellow]⚠[/yellow] {app.name}: App bundle is corrupted or incomplete"
+                        )
 
-        if not Confirm.ask("Do you want to fix permissions for these applications?"):
-            console.print("Permission fix cancelled.")
-            return
+                if not valid_apps_to_fix:
+                    console.print("[red]No valid applications found[/red]")
+                    return
 
-        # Fix permissions for the recently modified apps
-        if manager.fix_permissions_for_apps(valid_recent_apps):
+                console.print(
+                    f"\n[bold]Top {len(valid_apps_to_fix)} largest applications:[/bold]"
+                )
+
+                # Display the apps with numbering
+                manager.display_apps_table(
+                    [AppInfo(app) for app in valid_apps_to_fix],
+                    "Largest Applications",
+                    numbered=True
+                )
+
+                # Ask how many to fix
+                while True:
+                    try:
+                        count_str = Prompt.ask(
+                            f"How many apps to fix permissions for? (1-{len(valid_apps_to_fix)})",
+                            default=str(min(12, len(valid_apps_to_fix)))
+                        )
+                        count = int(count_str)
+                        if 1 <= count <= len(valid_apps_to_fix):
+                            valid_apps_to_fix = valid_apps_to_fix[:count]
+                            break
+                        else:
+                            console.print(f"[red]Please enter a number between 1 and {len(valid_apps_to_fix)}[/red]")
+                    except ValueError:
+                        console.print("[red]Please enter a valid number[/red]")
+
+            else:
+                # Found recent apps, use them
+                for app in recent_apps:
+                    if manager._check_app_integrity(app):
+                        valid_apps_to_fix.append(app)
+                    else:
+                        console.print(
+                            f"[yellow]⚠[/yellow] {app.name}: App bundle is corrupted or incomplete"
+                        )
+
+                if not valid_apps_to_fix:
+                    console.print("[red]No valid recently modified applications found[/red]")
+                    return
+
+                console.print(
+                    f"\n[bold]Found {len(valid_apps_to_fix)} recently modified applications:[/bold]"
+                )
+
+                # Display what will be processed
+                manager.display_apps_table(
+                    [AppInfo(app) for app in valid_apps_to_fix],
+                    "Recently Modified Applications",
+                )
+
+        # Fix permissions for the selected apps (no confirmation needed since user already chose count)
+        console.print(f"\n[bold]Fixing permissions for {len(valid_apps_to_fix)} application(s)...[/bold]")
+        if manager.fix_permissions_for_apps(valid_apps_to_fix):
             console.print(
                 "\n[bold green]✓ Permission fix completed successfully![/bold green]"
             )
@@ -1860,14 +2012,7 @@ Smart Restore Mode:
         )
         manager.display_apps_table(selected_apps, "Applications to Move")
 
-        # Confirm selection
-        if not Confirm.ask(
-            f"\nMove these applications to reach {target_free_gb} GB free space?"
-        ):
-            console.print("Operation cancelled.")
-            return
-
-        # Select volume
+        # Select volume first (before asking about method)
         volume_selection = manager.select_volume()
         if not volume_selection:
             console.print("No volume selected. Operation cancelled.")
@@ -1884,6 +2029,64 @@ Smart Restore Mode:
         else:
             console.print(f"[green]Created backup folder: {backup_folder}[/green]")
 
+        # Ask user which approach they want
+        console.print("\n[bold]Choose your approach:[/bold]")
+        console.print("1. Generate manual commands (review before executing)")
+        console.print("2. Proceed with automated script (default)")
+
+        approach = Prompt.ask("Select option", choices=["1", "2"], default="2")
+
+        if approach == "1":
+            # Generate manual instructions
+            console.print("\n[bold cyan]═══════════════════════════════════════════════════════════[/bold cyan]")
+            console.print("[bold cyan]STEP 1: DRAG AND DROP APPS IN FINDER[/bold cyan]")
+            console.print("[bold cyan]═══════════════════════════════════════════════════════════[/bold cyan]")
+            console.print("[yellow]Terminal commands don't work, but drag-and-drop does![/yellow]\n")
+
+            console.print("[bold]Instructions:[/bold]")
+            console.print("1. Open Finder and navigate to: [cyan]/Applications[/cyan]")
+            console.print("2. Click on 'Size' column header to sort by size (largest first)")
+            console.print("3. Select the following applications:\n")
+
+            for app in selected_apps:
+                console.print(f"   [dim]• {app.name} ({app.size_gb:.2f} GB)[/dim]")
+
+            console.print(f"\n4. Drag and drop them to: [cyan]{backup_folder}[/cyan]")
+            console.print("5. Wait for the copy to complete")
+            console.print("6. Come back and run this script again with --fix-permissions")
+
+            console.print("\n[bold cyan]═══════════════════════════════════════════════════════════[/bold cyan]")
+            console.print("[bold cyan]STEP 2: VERIFY THE MOVE[/bold cyan]")
+            console.print("[bold cyan]═══════════════════════════════════════════════════════════[/bold cyan]")
+            console.print("[yellow]After drag-and-drop completes, verify that:[/yellow]")
+            console.print(f"[dim]1. Applications are in {backup_folder}[/dim]")
+            console.print("[dim]2. Applications were removed from /Applications[/dim]")
+            console.print("[dim]3. Applications work when opened from the backup folder[/dim]")
+
+            console.print("\n[bold cyan]═══════════════════════════════════════════════════════════[/bold cyan]")
+            console.print("[bold cyan]STEP 3: DELETE COMMANDS (run from terminal)[/bold cyan]")
+            console.print("[bold cyan]═══════════════════════════════════════════════════════════[/bold cyan]")
+            console.print("[yellow]After verifying the apps work, delete them from the external drive:[/yellow]\n")
+
+            delete_commands = []
+            for app in selected_apps:
+                destination = backup_folder / app.path.name
+                delete_commands.append(f"sudo rm -rf '{destination}'")
+
+            for cmd in delete_commands:
+                console.print(f"[dim]{cmd}[/dim]")
+
+            console.print("\n[bold green]Manual process instructions generated![/bold green]")
+            console.print(f"[bold]Backup location: {backup_folder}[/bold]")
+            console.print(
+                f"\n[bold yellow]📋 RESTORE COMMAND (save this for later):[/bold yellow]"
+            )
+            console.print(
+                f"[bold cyan]sudo python {sys.argv[0]} --restore {backup_folder}[/bold cyan]"
+            )
+            return
+
+        # Proceed with automated script (option 2)
         # Move applications
         success, failed_apps = manager.move_apps_to_volume(selected_apps, backup_folder)
 
