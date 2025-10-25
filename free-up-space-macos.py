@@ -88,7 +88,7 @@ class SpaceManager:
         # Applications that should never be moved due to system integration or security
         self.protected_apps = {
             "1Password.app",
-            # Add more apps here as needed
+            "Obsidian.app",
         }
 
     def get_applications(self) -> List[AppInfo]:
