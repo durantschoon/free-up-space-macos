@@ -5,6 +5,7 @@ to free up space on your Mac's main drive.
 """
 
 import argparse
+import difflib
 import os
 import shutil
 import stat
@@ -92,10 +93,7 @@ class TimeManagementStrategy:
         try:
             # Check if Time Machine is enabled
             result = subprocess.run(
-                ["tmutil", "destinationinfo"],
-                capture_output=True,
-                text=True,
-                timeout=5
+                ["tmutil", "destinationinfo"], capture_output=True, text=True, timeout=5
             )
 
             # If tmutil returns 0 and has output, TM is configured
@@ -113,17 +111,14 @@ class TimeManagementStrategy:
         try:
             # Try to get destination info
             result = subprocess.run(
-                ["tmutil", "destinationinfo"],
-                capture_output=True,
-                text=True,
-                timeout=5
+                ["tmutil", "destinationinfo"], capture_output=True, text=True, timeout=5
             )
 
             if result.returncode == 0:
                 # Parse output to find mount point
-                for line in result.stdout.split('\n'):
-                    if 'Mount Point' in line:
-                        mount_point = line.split(':', 1)[1].strip()
+                for line in result.stdout.split("\n"):
+                    if "Mount Point" in line:
+                        mount_point = line.split(":", 1)[1].strip()
                         self.tm_volume = Path(mount_point)
                         return self.tm_volume
 
@@ -143,7 +138,7 @@ class TimeManagementStrategy:
                         result = subprocess.run(
                             ["tmutil", "destinationinfo"],
                             capture_output=True,
-                            text=True
+                            text=True,
                         )
                         if str(vol) in result.stdout:
                             self.tm_volume = vol
@@ -159,10 +154,7 @@ class TimeManagementStrategy:
 
         try:
             result = subprocess.run(
-                ["tmutil", "latestbackup"],
-                capture_output=True,
-                text=True,
-                timeout=5
+                ["tmutil", "latestbackup"], capture_output=True, text=True, timeout=5
             )
 
             if result.returncode == 0:
@@ -171,13 +163,18 @@ class TimeManagementStrategy:
 
                 # Try to extract date from path
                 import re
-                match = re.search(r'(\d{4}-\d{2}-\d{2})-(\d{6})', backup_path)
+
+                match = re.search(r"(\d{4}-\d{2}-\d{2})-(\d{6})", backup_path)
                 if match:
                     date_str = match.group(1)
                     time_str = match.group(2)
                     # Parse into datetime
-                    dt_str = f"{date_str} {time_str[:2]}:{time_str[2:4]}:{time_str[4:6]}"
-                    self.last_backup_time = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
+                    dt_str = (
+                        f"{date_str} {time_str[:2]}:{time_str[2:4]}:{time_str[4:6]}"
+                    )
+                    self.last_backup_time = datetime.strptime(
+                        dt_str, "%Y-%m-%d %H:%M:%S"
+                    )
                     return self.last_backup_time
 
             return None
@@ -189,7 +186,9 @@ class TimeManagementStrategy:
         Guide user to verify which apps exist in Time Machine backup.
         Returns list of apps confirmed to be in backup.
         """
-        console.print("\n[bold yellow]⚠️  IMPORTANT: Time Machine Verification Required[/bold yellow]\n")
+        console.print(
+            "\n[bold yellow]⚠️  IMPORTANT: Time Machine Verification Required[/bold yellow]\n"
+        )
         console.print(
             "Before deleting apps, you need to verify they exist in Time Machine:\n"
         )
@@ -209,14 +208,18 @@ class TimeManagementStrategy:
         for app in apps:
             response = Confirm.ask(
                 f"  {app.name} ({app.size_gb:.2f} GB) - Exists in Time Machine?",
-                default=False
+                default=False,
             )
 
             if response:
                 verified_apps.append(app)
-                console.print(f"  [green]✓[/green] {app.name} marked for deletion (verified in TM)")
+                console.print(
+                    f"  [green]✓[/green] {app.name} marked for deletion (verified in TM)"
+                )
             else:
-                console.print(f"  [yellow]⚠[/yellow] {app.name} skipped (not in TM or not verified)")
+                console.print(
+                    f"  [yellow]⚠[/yellow] {app.name} skipped (not in TM or not verified)"
+                )
 
         return verified_apps
 
@@ -246,12 +249,12 @@ class TimeManagementStrategy:
                     subprocess.run(
                         ["chflags", "-R", "nouchg", str(app.path)],
                         capture_output=True,
-                        text=True
+                        text=True,
                     )
                     subprocess.run(
                         ["chflags", "-R", "noschg", str(app.path)],
                         capture_output=True,
-                        text=True
+                        text=True,
                     )
 
                     # Delete the app
@@ -270,7 +273,9 @@ class TimeManagementStrategy:
         console.print()
 
         if failed_apps:
-            console.print(f"[yellow]⚠[/yellow] Failed to delete {len(failed_apps)} apps:")
+            console.print(
+                f"[yellow]⚠[/yellow] Failed to delete {len(failed_apps)} apps:"
+            )
             for app_name in failed_apps:
                 console.print(f"  - {app_name}")
             console.print("\nYou may need to delete these manually.")
@@ -280,7 +285,9 @@ class TimeManagementStrategy:
 
     def guide_restoration(self) -> None:
         """Provide step-by-step guide for restoring apps from Time Machine."""
-        console.print("\n[bold cyan]═══════════════════════════════════════════════════════[/bold cyan]")
+        console.print(
+            "\n[bold cyan]═══════════════════════════════════════════════════════[/bold cyan]"
+        )
         console.print("[bold]To Restore Apps from Time Machine:[/bold]\n")
         console.print("1. Click the Time Machine icon in your menu bar")
         console.print("   (or use Spotlight to search 'Time Machine')")
@@ -290,8 +297,12 @@ class TimeManagementStrategy:
         console.print("5. Select the apps you want to restore")
         console.print("6. Click the 'Restore' button")
         console.print("7. Time Machine will restore with correct permissions!\n")
-        console.print("[dim]Note: You can also run this script with --restore-from-tm[/dim]")
-        console.print("[bold cyan]═══════════════════════════════════════════════════════[/bold cyan]\n")
+        console.print(
+            "[dim]Note: You can also run this script with --restore-from-tm[/dim]"
+        )
+        console.print(
+            "[bold cyan]═══════════════════════════════════════════════════════[/bold cyan]\n"
+        )
 
 
 class SpaceManager:
@@ -432,7 +443,9 @@ class SpaceManager:
             except Exception:
                 pass
 
-    def display_apps_table(self, apps: List[AppInfo], title: str = "Applications", numbered: bool = False):
+    def display_apps_table(
+        self, apps: List[AppInfo], title: str = "Applications", numbered: bool = False
+    ):
         """Display applications in a formatted table."""
         table = Table(title=title, box=box.ROUNDED)
 
@@ -624,15 +637,13 @@ class SpaceManager:
             import subprocess
 
             # Clear attributes on the main path
-            subprocess.run(
-                ["xattr", "-c", str(path)], capture_output=True, text=True
-            )
+            subprocess.run(["xattr", "-c", str(path)], capture_output=True, text=True)
 
             # Recursively clear attributes on all files inside (suppress errors for protected files)
             subprocess.run(
                 ["find", str(path), "-exec", "xattr", "-c", "{}", ";"],
                 capture_output=True,
-                text=True
+                text=True,
             )
             return True
         except Exception:
@@ -1141,7 +1152,9 @@ class SpaceManager:
 
                         # Create AppInfo which calculates size
                         app_info = AppInfo(app_path)
-                        if app_info.size_gb > 0:  # Only include apps with measurable size
+                        if (
+                            app_info.size_gb > 0
+                        ):  # Only include apps with measurable size
                             apps_with_sizes.append((app_path, app_info.size_gb))
             except Exception as e:
                 console.print(f"[yellow]⚠[/yellow] Error scanning /Applications: {e}")
@@ -1149,6 +1162,50 @@ class SpaceManager:
         # Sort by size (largest first) and take top N
         apps_with_sizes.sort(key=lambda x: x[1], reverse=True)
         return [app for app, _ in apps_with_sizes[:top_n]]
+
+    def find_apps_by_name(
+        self, search_name: str, min_ratio: float = 0.4
+    ) -> List[Tuple[Path, float]]:
+        """Find apps by fuzzy name matching.
+
+        Args:
+            search_name: The name to search for (case-insensitive)
+            min_ratio: Minimum similarity ratio (0.0 to 1.0) for matches
+
+        Returns:
+            List of tuples (app_path, similarity_ratio) sorted by similarity (highest first)
+        """
+        matches = []
+        search_name_lower = search_name.lower()
+
+        try:
+            for app_path in self.applications_dir.iterdir():
+                if app_path.is_dir() and app_path.suffix == ".app":
+                    # Get app name without .app extension
+                    app_name = app_path.stem
+                    app_name_lower = app_name.lower()
+
+                    # Calculate similarity ratio
+                    ratio = difflib.SequenceMatcher(
+                        None, search_name_lower, app_name_lower
+                    ).ratio()
+
+                    # Also check if search name is contained in app name (or vice versa)
+                    if (
+                        search_name_lower in app_name_lower
+                        or app_name_lower in search_name_lower
+                    ):
+                        # Boost ratio for substring matches
+                        ratio = max(ratio, 0.7)
+
+                    if ratio >= min_ratio:
+                        matches.append((app_path, ratio))
+        except Exception as e:
+            console.print(f"[yellow]⚠[/yellow] Error scanning /Applications: {e}")
+
+        # Sort by similarity ratio (highest first)
+        matches.sort(key=lambda x: x[1], reverse=True)
+        return matches
 
     def _check_app_in_use(self, app_path: Path) -> bool:
         """Check if an app is currently in use by any process."""
@@ -1835,6 +1892,7 @@ Examples:
   sudo python free-up-space-macos.py --restore /Volumes/MyDrive/AppBackup_20231201_143022  # Restore specific backup
   sudo python free-up-space-macos.py --restore          # Interactive restore - select volume and backup folder
   sudo python free-up-space-macos.py --fix-permissions  # Fix permissions for recently copied apps (smart restore)
+  sudo python free-up-space-macos.py --fix-permissions-any gimp  # Find and fix permissions for GIMP.app
 
 The script will calculate how much space to free up based on your target free space goal.
 Perfect for OS upgrades that require specific amounts of free space.
@@ -1864,6 +1922,13 @@ Smart Restore Mode:
         type=int,
         metavar="N",
         help="Show top N largest apps and ask how many to fix permissions for (default: 15)",
+    )
+
+    parser.add_argument(
+        "--fix-permissions-any",
+        type=str,
+        metavar="NAME",
+        help="Find app by fuzzy name match and fix permissions (e.g., 'gimp' finds GIMP.app)",
     )
 
     parser.add_argument(
@@ -2019,6 +2084,109 @@ Smart Restore Mode:
                     sys.exit(1)
         return
 
+    # Handle fix-permissions-any mode (fuzzy name matching)
+    if args.fix_permissions_any:
+        console.print(
+            f"[bold]Searching for applications matching '{args.fix_permissions_any}'...[/bold]"
+        )
+
+        matches = manager.find_apps_by_name(args.fix_permissions_any)
+
+        if not matches:
+            console.print(
+                f"[red]No applications found matching '{args.fix_permissions_any}'[/red]"
+            )
+            return
+
+        # If only one match and it's a very good match (ratio > 0.8), use it directly
+        if len(matches) == 1 and matches[0][1] > 0.8:
+            app_path = matches[0][0]
+            console.print(f"\n[bold]Found: {app_path.name}[/bold]")
+
+            if not Confirm.ask(f"Fix permissions for {app_path.name}?"):
+                console.print("Permission fix cancelled.")
+                return
+
+            if not manager._check_app_integrity(app_path):
+                console.print(
+                    f"[red]{app_path.name}: App bundle is corrupted or incomplete[/red]"
+                )
+                return
+
+            if manager.fix_permissions_for_apps([app_path]):
+                console.print(
+                    "\n[bold green]✓ Permission fix completed successfully![/bold green]"
+                )
+            else:
+                console.print("\n[bold red]✗ Permission fix failed![/bold red]")
+                sys.exit(1)
+            return
+
+        # Multiple matches or lower confidence - show disambiguation
+        console.print(f"\n[bold]Found {len(matches)} matching application(s):[/bold]")
+
+        # Display matches with similarity scores
+        table = Table(
+            title="Matching Applications", show_header=True, header_style="bold cyan"
+        )
+        table.add_column("#", style="dim", width=4)
+        table.add_column("Application", style="cyan")
+        table.add_column("Path", style="dim")
+        table.add_column("Match", style="green")
+
+        for idx, (app_path, ratio) in enumerate(matches[:10], 1):  # Show top 10
+            match_pct = f"{ratio * 100:.0f}%"
+            table.add_row(str(idx), app_path.stem, str(app_path), match_pct)
+
+        console.print(table)
+
+        if len(matches) > 10:
+            console.print(f"[dim]... and {len(matches) - 10} more matches[/dim]")
+
+        # Ask user to select
+        if len(matches) == 1:
+            selected_idx = 0
+            selected_app = matches[0][0]
+        else:
+            while True:
+                try:
+                    choice_str = Prompt.ask(
+                        f"Select application to fix (1-{min(len(matches), 10)})",
+                        default="1",
+                    )
+                    choice = int(choice_str)
+                    if 1 <= choice <= min(len(matches), 10):
+                        selected_idx = choice - 1
+                        selected_app = matches[selected_idx][0]
+                        break
+                    else:
+                        console.print(
+                            f"[red]Please enter a number between 1 and {min(len(matches), 10)}[/red]"
+                        )
+                except ValueError:
+                    console.print("[red]Please enter a valid number[/red]")
+
+        console.print(f"\n[bold]Selected: {selected_app.name}[/bold]")
+
+        if not Confirm.ask(f"Fix permissions for {selected_app.name}?"):
+            console.print("Permission fix cancelled.")
+            return
+
+        if not manager._check_app_integrity(selected_app):
+            console.print(
+                f"[red]{selected_app.name}: App bundle is corrupted or incomplete[/red]"
+            )
+            return
+
+        if manager.fix_permissions_for_apps([selected_app]):
+            console.print(
+                "\n[bold green]✓ Permission fix completed successfully![/bold green]"
+            )
+        else:
+            console.print("\n[bold red]✗ Permission fix failed![/bold red]")
+            sys.exit(1)
+        return
+
     # Handle fix-permissions mode
     if args.fix_permissions or args.fix_permissions_choose is not None:
         console.print(
@@ -2032,10 +2200,10 @@ Smart Restore Mode:
 
         if args.fix_permissions_choose is not None:
             # Show top N largest apps and ask how many to fix
-            top_n = args.fix_permissions_choose if args.fix_permissions_choose > 0 else 15
-            console.print(
-                f"\n[bold]Finding top {top_n} largest applications...[/bold]"
+            top_n = (
+                args.fix_permissions_choose if args.fix_permissions_choose > 0 else 15
             )
+            console.print(f"\n[bold]Finding top {top_n} largest applications...[/bold]")
             largest_apps = manager.get_largest_apps(top_n=top_n)
 
             if not largest_apps:
@@ -2063,7 +2231,7 @@ Smart Restore Mode:
             manager.display_apps_table(
                 [AppInfo(app) for app in valid_apps_to_fix],
                 "Largest Applications",
-                numbered=True
+                numbered=True,
             )
 
             # Ask how many to fix
@@ -2071,20 +2239,24 @@ Smart Restore Mode:
                 try:
                     count_str = Prompt.ask(
                         f"How many apps to fix permissions for? (1-{len(valid_apps_to_fix)})",
-                        default=str(min(12, len(valid_apps_to_fix)))
+                        default=str(min(12, len(valid_apps_to_fix))),
                     )
                     count = int(count_str)
                     if 1 <= count <= len(valid_apps_to_fix):
                         valid_apps_to_fix = valid_apps_to_fix[:count]
                         break
                     else:
-                        console.print(f"[red]Please enter a number between 1 and {len(valid_apps_to_fix)}[/red]")
+                        console.print(
+                            f"[red]Please enter a number between 1 and {len(valid_apps_to_fix)}[/red]"
+                        )
                 except ValueError:
                     console.print("[red]Please enter a valid number[/red]")
 
         else:
             # Original behavior: find recently modified apps
-            console.print("[dim]Looking for recently copied applications (last 24 hours)...[/dim]")
+            console.print(
+                "[dim]Looking for recently copied applications (last 24 hours)...[/dim]"
+            )
             recent_apps = manager.find_recently_modified_apps(hours=24)
 
             if not recent_apps:
@@ -2123,7 +2295,7 @@ Smart Restore Mode:
                 manager.display_apps_table(
                     [AppInfo(app) for app in valid_apps_to_fix],
                     "Largest Applications",
-                    numbered=True
+                    numbered=True,
                 )
 
                 # Ask how many to fix
@@ -2131,14 +2303,16 @@ Smart Restore Mode:
                     try:
                         count_str = Prompt.ask(
                             f"How many apps to fix permissions for? (1-{len(valid_apps_to_fix)})",
-                            default=str(min(12, len(valid_apps_to_fix)))
+                            default=str(min(12, len(valid_apps_to_fix))),
                         )
                         count = int(count_str)
                         if 1 <= count <= len(valid_apps_to_fix):
                             valid_apps_to_fix = valid_apps_to_fix[:count]
                             break
                         else:
-                            console.print(f"[red]Please enter a number between 1 and {len(valid_apps_to_fix)}[/red]")
+                            console.print(
+                                f"[red]Please enter a number between 1 and {len(valid_apps_to_fix)}[/red]"
+                            )
                     except ValueError:
                         console.print("[red]Please enter a valid number[/red]")
 
@@ -2153,7 +2327,9 @@ Smart Restore Mode:
                         )
 
                 if not valid_apps_to_fix:
-                    console.print("[red]No valid recently modified applications found[/red]")
+                    console.print(
+                        "[red]No valid recently modified applications found[/red]"
+                    )
                     return
 
                 console.print(
@@ -2167,7 +2343,9 @@ Smart Restore Mode:
                 )
 
         # Fix permissions for the selected apps (no confirmation needed since user already chose count)
-        console.print(f"\n[bold]Fixing permissions for {len(valid_apps_to_fix)} application(s)...[/bold]")
+        console.print(
+            f"\n[bold]Fixing permissions for {len(valid_apps_to_fix)} application(s)...[/bold]"
+        )
         if manager.fix_permissions_for_apps(valid_apps_to_fix):
             console.print(
                 "\n[bold green]✓ Permission fix completed successfully![/bold green]"
@@ -2190,12 +2368,16 @@ Smart Restore Mode:
 
             last_backup = manager.tm_strategy.get_last_backup_time()
             if last_backup:
-                console.print(f"[green]✓ Last backup: {last_backup.strftime('%Y-%m-%d %H:%M:%S')}[/green]")
+                console.print(
+                    f"[green]✓ Last backup: {last_backup.strftime('%Y-%m-%d %H:%M:%S')}[/green]"
+                )
             else:
                 console.print("[yellow]⚠ Could not determine last backup time[/yellow]")
         else:
             console.print("[red]✗ Time Machine is not available[/red]")
-            console.print("[dim]Time Machine may not be configured or accessible.[/dim]")
+            console.print(
+                "[dim]Time Machine may not be configured or accessible.[/dim]"
+            )
 
         return
 
@@ -2221,20 +2403,28 @@ Smart Restore Mode:
                 last_backup = manager.tm_strategy.get_last_backup_time()
                 if last_backup:
                     import time
+
                     hours_ago = (datetime.now() - last_backup).total_seconds() / 3600
                     if hours_ago < 24:
-                        console.print(f"[green]✓ Last backup: {int(hours_ago)} hours ago[/green]")
+                        console.print(
+                            f"[green]✓ Last backup: {int(hours_ago)} hours ago[/green]"
+                        )
                     else:
                         days_ago = int(hours_ago / 24)
-                        console.print(f"[yellow]⚠ Last backup: {days_ago} days ago[/yellow]")
+                        console.print(
+                            f"[yellow]⚠ Last backup: {days_ago} days ago[/yellow]"
+                        )
 
                 console.print("\n[bold cyan]Time Machine Detected![/bold cyan]")
-                console.print("[dim]You can delete apps and restore them from Time Machine later.")
-                console.print("This is safer than copying to external drives (no corruption, correct permissions).[/dim]\n")
+                console.print(
+                    "[dim]You can delete apps and restore them from Time Machine later."
+                )
+                console.print(
+                    "This is safer than copying to external drives (no corruption, correct permissions).[/dim]\n"
+                )
 
                 use_time_machine = Confirm.ask(
-                    "Use Time Machine method (recommended)?",
-                    default=True
+                    "Use Time Machine method (recommended)?", default=True
                 )
             else:
                 console.print("[yellow]⚠ Time Machine not available[/yellow]")
@@ -2323,26 +2513,38 @@ Smart Restore Mode:
             verified_apps = manager.tm_strategy.verify_apps_in_backup(selected_apps)
 
             if not verified_apps:
-                console.print("\n[yellow]⚠ No apps were verified in Time Machine backup[/yellow]")
+                console.print(
+                    "\n[yellow]⚠ No apps were verified in Time Machine backup[/yellow]"
+                )
                 console.print("[dim]Falling back to external drive method...[/dim]\n")
                 use_time_machine = False
             else:
                 total_verified_size = sum(app.size_gb for app in verified_apps)
 
                 # Show final confirmation
-                console.print(f"\n[bold yellow]⚠️  WARNING: This will DELETE the following apps:[/bold yellow]\n")
+                console.print(
+                    f"\n[bold yellow]⚠️  WARNING: This will DELETE the following apps:[/bold yellow]\n"
+                )
                 for app in verified_apps:
                     console.print(f"  • {app.name} ({app.size_gb:.2f} GB)")
 
-                console.print(f"\n[green]✓ These apps are backed up in Time Machine[/green]")
+                console.print(
+                    f"\n[green]✓ These apps are backed up in Time Machine[/green]"
+                )
                 console.print(f"[green]✓ You can restore them anytime[/green]")
-                console.print(f"[green]✓ This will free up {total_verified_size:.2f} GB[/green]\n")
+                console.print(
+                    f"[green]✓ This will free up {total_verified_size:.2f} GB[/green]\n"
+                )
 
                 if Confirm.ask("Proceed with deletion?", default=False):
                     if manager.tm_strategy.delete_verified_apps(verified_apps):
                         new_free = manager.get_current_free_space()
-                        console.print(f"\n[bold green]✓ Success! Freed {total_verified_size:.2f} GB[/bold green]")
-                        console.print(f"[bold]New free space: {new_free:.2f} GB[/bold]\n")
+                        console.print(
+                            f"\n[bold green]✓ Success! Freed {total_verified_size:.2f} GB[/bold green]"
+                        )
+                        console.print(
+                            f"[bold]New free space: {new_free:.2f} GB[/bold]\n"
+                        )
 
                         # Show restoration guide
                         manager.tm_strategy.guide_restoration()
@@ -2380,14 +2582,22 @@ Smart Restore Mode:
 
         if approach == "1":
             # Generate manual instructions
-            console.print("\n[bold cyan]═══════════════════════════════════════════════════════════[/bold cyan]")
+            console.print(
+                "\n[bold cyan]═══════════════════════════════════════════════════════════[/bold cyan]"
+            )
             console.print("[bold cyan]STEP 1: DRAG AND DROP APPS IN FINDER[/bold cyan]")
-            console.print("[bold cyan]═══════════════════════════════════════════════════════════[/bold cyan]")
-            console.print("[yellow]Terminal commands don't work, but drag-and-drop does![/yellow]\n")
+            console.print(
+                "[bold cyan]═══════════════════════════════════════════════════════════[/bold cyan]"
+            )
+            console.print(
+                "[yellow]Terminal commands don't work, but drag-and-drop does![/yellow]\n"
+            )
 
             console.print("[bold]Instructions:[/bold]")
             console.print("1. Open Finder and navigate to: [cyan]/Applications[/cyan]")
-            console.print("2. Click on 'Size' column header to sort by size (largest first)")
+            console.print(
+                "2. Click on 'Size' column header to sort by size (largest first)"
+            )
             console.print("3. Select the following applications:\n")
 
             for app in selected_apps:
@@ -2395,20 +2605,38 @@ Smart Restore Mode:
 
             console.print(f"\n4. Drag and drop them to: [cyan]{backup_folder}[/cyan]")
             console.print("5. Wait for the copy to complete")
-            console.print("6. Come back and run this script again with --fix-permissions")
+            console.print(
+                "6. Come back and run this script again with --fix-permissions"
+            )
 
-            console.print("\n[bold cyan]═══════════════════════════════════════════════════════════[/bold cyan]")
+            console.print(
+                "\n[bold cyan]═══════════════════════════════════════════════════════════[/bold cyan]"
+            )
             console.print("[bold cyan]STEP 2: VERIFY THE MOVE[/bold cyan]")
-            console.print("[bold cyan]═══════════════════════════════════════════════════════════[/bold cyan]")
-            console.print("[yellow]After drag-and-drop completes, verify that:[/yellow]")
+            console.print(
+                "[bold cyan]═══════════════════════════════════════════════════════════[/bold cyan]"
+            )
+            console.print(
+                "[yellow]After drag-and-drop completes, verify that:[/yellow]"
+            )
             console.print(f"[dim]1. Applications are in {backup_folder}[/dim]")
             console.print("[dim]2. Applications were removed from /Applications[/dim]")
-            console.print("[dim]3. Applications work when opened from the backup folder[/dim]")
+            console.print(
+                "[dim]3. Applications work when opened from the backup folder[/dim]"
+            )
 
-            console.print("\n[bold cyan]═══════════════════════════════════════════════════════════[/bold cyan]")
-            console.print("[bold cyan]STEP 3: DELETE COMMANDS (run from terminal)[/bold cyan]")
-            console.print("[bold cyan]═══════════════════════════════════════════════════════════[/bold cyan]")
-            console.print("[yellow]After verifying the apps work, delete them from the external drive:[/yellow]\n")
+            console.print(
+                "\n[bold cyan]═══════════════════════════════════════════════════════════[/bold cyan]"
+            )
+            console.print(
+                "[bold cyan]STEP 3: DELETE COMMANDS (run from terminal)[/bold cyan]"
+            )
+            console.print(
+                "[bold cyan]═══════════════════════════════════════════════════════════[/bold cyan]"
+            )
+            console.print(
+                "[yellow]After verifying the apps work, delete them from the external drive:[/yellow]\n"
+            )
 
             delete_commands = []
             for app in selected_apps:
@@ -2418,7 +2646,9 @@ Smart Restore Mode:
             for cmd in delete_commands:
                 console.print(f"[dim]{cmd}[/dim]")
 
-            console.print("\n[bold green]Manual process instructions generated![/bold green]")
+            console.print(
+                "\n[bold green]Manual process instructions generated![/bold green]"
+            )
             console.print(f"[bold]Backup location: {backup_folder}[/bold]")
             console.print(
                 f"\n[bold yellow]📋 RESTORE COMMAND (save this for later):[/bold yellow]"
