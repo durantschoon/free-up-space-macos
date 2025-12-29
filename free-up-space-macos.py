@@ -2420,7 +2420,7 @@ Smart Restore Mode:
                     "[dim]You can delete apps and restore them from Time Machine later."
                 )
                 console.print(
-                    "This is safer than copying to external drives (no corruption, correct permissions).[/dim]\n"
+                    "[dim]This is safer than copying to external drives (no corruption, correct permissions).[/dim]\n"
                 )
 
                 use_time_machine = Confirm.ask(
